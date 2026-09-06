@@ -1,3 +1,5 @@
+# ARCHIVED - Support the official release which wasn't announced at the time!
+
 # CloverPit — Nintendo Switch port (Unity 6 / IL2CPP wrapper)
  
 This is a native wrapper / loader that runs the original ARM64 Android build of CloverPit on Switch homebrew. It contains no game code and no game assets.
