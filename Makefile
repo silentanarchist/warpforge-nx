@@ -129,7 +129,7 @@ LIBS     += $(MONO_NAT)/libSystem.IO.Compression.Native.a \
             $(MONO_LIB)/libmono-component-hot_reload-stub-static.a \
             $(MONO_LIB)/libmono-component-marshal-ilgen-static.a \
             $(MONO_RT)/artifacts/obj/mono/libnx.arm64.Debug/_deps/fetchzlibng-build/libz.a \
-            -pthread -lnx -lm
+            -lmbedtls -lmbedx509 -lmbedcrypto -pthread -lnx -lm
 endif
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

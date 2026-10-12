@@ -181,6 +181,15 @@ void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_da
 			else if (!strcmp(name, "wf_detour_install"))   symbol = (void *)wf_detour_install;
 			else if (!strcmp(name, "wf_detour_remove"))    symbol = (void *)wf_detour_remove;
 			else if (!strcmp(name, "wf_fastpath_install")) symbol = (void *)wf_fastpath_install;
+			else {
+				extern void *wf_tls_connect(); extern int wf_tls_read(); extern int wf_tls_write();
+				extern void wf_tls_close(); extern void wf_tls_abort();
+				if      (!strcmp(name, "wf_tls_connect")) symbol = (void *)wf_tls_connect;
+				else if (!strcmp(name, "wf_tls_read"))    symbol = (void *)wf_tls_read;
+				else if (!strcmp(name, "wf_tls_write"))   symbol = (void *)wf_tls_write;
+				else if (!strcmp(name, "wf_tls_close"))   symbol = (void *)wf_tls_close;
+				else if (!strcmp(name, "wf_tls_abort"))   symbol = (void *)wf_tls_abort;
+			}
 		}
 		if (!symbol && strncmp(name, "SystemNative_", 13) && strncmp(name, "GlobalizationNative_", 20))
 			symbol = so_resolve_external(name);

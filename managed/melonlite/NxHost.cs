@@ -31,7 +31,10 @@ namespace MelonLoader.Switch
         static void LoadMod(string file)
         {
             MelonLogger.Msg($"Loading {Path.GetFileName(file)} ...");
-            var asm = Assembly.LoadFrom(file);
+            byte[] shimmed = null;
+            try { shimmed = NxModShims.Apply(file); }
+            catch (Exception e) { MelonLogger.Warning($"[switch] could not adjust {Path.GetFileName(file)} for the Switch ({e.GetType().Name}: {e.Message}); loading it as it is"); }
+            var asm = shimmed != null ? Assembly.Load(shimmed) : Assembly.LoadFrom(file);
             var info = asm.GetCustomAttribute<MelonInfoAttribute>();
             if (info == null) { MelonLogger.Warning($"{Path.GetFileName(file)} has no [MelonInfo] -- not a mod, skipped"); return; }
             if (!typeof(MelonBase).IsAssignableFrom(info.SystemType)) { MelonLogger.Error($"{info.Name}: {info.SystemType} is not a MelonMod"); return; }
