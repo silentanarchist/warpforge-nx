@@ -242,6 +242,7 @@ int cp_boot_and_run(void) {
     /* WARPFORGE: install the managed hooks on the first frame the runtime is up. */
     if (frame_no < 2) debugPrintf("[loop] frame %llu: hooks_tick\n", (unsigned long long)frame_no);
     wf_hooks_tick();
+    { extern void wf_mono_on_frame(void); wf_mono_on_frame(); }
 
     /* Samples deltaTime for the managed Time hooks. Must be once per frame. */
     cp_time_tick();

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The managed loader that runs inside warpforge_nx on the Switch (Mono NX, interpreter).
+       Builds Il2CppInterop from the owner's ARM64 fork (cloned by CI into extern/). -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>nxloader</AssemblyName>
+    <RootNamespace>WarpforgeNx</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Il2CppInteropDir Condition="'$(Il2CppInteropDir)' == ''">$(MSBuildThisFileDirectory)../../extern/Il2CppInteropARM64</Il2CppInteropDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(Il2CppInteropDir)/Il2CppInterop.Runtime/Il2CppInterop.Runtime.csproj" />
+    <ProjectReference Include="$(Il2CppInteropDir)/Il2CppInterop.HarmonySupport/Il2CppInterop.HarmonySupport.csproj" />
+    <!-- compile-time reference only; the game's own generated Il2Cppmscorlib loads at run time -->
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(Il2CppInteropDir)/Il2CppInterop.Runtime/Libs/Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

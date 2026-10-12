@@ -20,15 +20,34 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: |
+            8.0.x
+            9.0.x
       - name: Build mono_hello
         run: |
           dotnet build managed/mono_hello -c Release -o out
           ls -la out/mono_hello.dll
+      # The loader builds Il2CppInterop from the owner's ARM64 fork (LGPL-3.0; the
+      # fork is the source of the "1.5.0-arm64c" build the phone runs).
+      - name: Fetch Il2CppInterop (ARM64 fork)
+        run: |
+          git clone --depth 1 https://github.com/silentanarchist/Il2CppInteropARM64 extern/Il2CppInteropARM64
+          cd extern/Il2CppInteropARM64 && git log -1 --oneline
+      - name: Build nxloader
+        run: |
+          dotnet build managed/nxloader -c Release -o loader
+          rm -f loader/*.pdb loader/*.xml loader/*.json
+          ls -la loader
+          mkdir -p pkg/MelonLoader/Loader pkg/MelonLoader/Il2CppAssemblies pkg/MelonLoader/Mods pkg/MelonLoader/UserData
+          cp loader/*.dll pkg/MelonLoader/Loader/
+          echo "Copy your refs\\il2cpp\\*.dll here (the generated Il2Cpp assemblies)." > pkg/MelonLoader/Il2CppAssemblies/README.txt
+          cd pkg && zip -qr ../loader_sd.zip MelonLoader && cd .. && ls -la loader_sd.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mono_hello
-          path: out/mono_hello.dll
+          path: |
+            out/mono_hello.dll
+            loader_sd.zip
 
   nro:
     runs-on: ubuntu-latest
@@ -62,6 +81,7 @@ jobs:
         with:
           name: mono_hello
           path: .
+      - run: mv out/mono_hello.dll . && ls -la mono_hello.dll loader_sd.zip
 
       # The Mono runtime files for the SD card root (/mono): mono-nx's sd_files.zip
       # minus its demos, with logging on. BCL = dotnet/runtime (MIT), ICU data.
@@ -83,6 +103,7 @@ jobs:
             *.elf
             mono_hello.dll
             mono_sd.zip
+            loader_sd.zip
 
 
       # Every push to main refreshes a rolling pre-release called "test", so a
@@ -95,12 +116,13 @@ jobs:
           tag_name: test
           name: "Test build (latest main)"
           prerelease: true
-          body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime (and the il2cpp probe in mono_hello.dll) is linked in and starts only when mono_sd.zip is unpacked to the SD root; mono_hello.dll goes in the game folder."
+          body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime is linked in and starts only when mono_sd.zip is unpacked to the SD root. loader_sd.zip unpacks into the game folder (MelonLoader/...); without it, mono_hello.dll in the game folder runs the milestone probes instead."
           files: |
             *.nro
             *.elf
             mono_hello.dll
             mono_sd.zip
+            loader_sd.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -111,4 +133,5 @@ jobs:
             *.elf
             mono_hello.dll
             mono_sd.zip
+            loader_sd.zip
           generate_release_notes: true
