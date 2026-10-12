@@ -448,6 +448,11 @@ int main(int argc, char *argv[]) {
       debugPrintf("[boot] WARNING: less than %u MB free -- the graphics driver "
                   "may fail an allocation mid-frame and wedge the console\n",
                   GFX_RESERVE_MB / 2);
+    if ((tot >> 20) < 1000)
+      fatal_error("Only %u MB of memory: this was launched from the album.\n\n"
+                  "Unity needs the memory of a full application. Hold R while\n"
+                  "starting any installed game, then pick warpforge_nx.",
+                  (unsigned)(tot >> 20));
     if ((tot >> 20) < 5000)
       debugPrintf("[boot] NOTE: 4GB console. Warpforge's payload is ~150 MB of "
                   "libs + ~770 MB of assets (loaded on demand through Addressables).\n");

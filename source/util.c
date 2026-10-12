@@ -143,6 +143,16 @@ int debugPrintf(char *text, ...) {
   if (log_is_noisy(text)) return 0;
   mutexLock(&g_log_lock);
   if (!g_logf) {
+    /* WARPFORGE: one run per file. The previous run's log is kept once as
+     * debug.prev.log; appending made two launches read as one. */
+    static int fresh;
+    if (!fresh) {
+      fresh = 1;
+      char prev[600];
+      snprintf(prev, sizeof prev, "%s.prev", cp_log_path());
+      remove(prev);
+      rename(cp_log_path(), prev);
+    }
     g_logf = fopen(cp_log_path(), "a");
     if (g_logf) setvbuf(g_logf, g_logbuf, _IOFBF, sizeof g_logbuf);
     g_log_last_flush_ns = log_now_ns();
