@@ -950,6 +950,11 @@ static juint j_IsInstanceOf(void *env, void *obj, void *clazz) {
   const char *cn = class_name_of(clazz);
   int ui = unity_isinstance(obj, cn);
   if (ui >= 0) return (juint)ui;
+  /* Our injected touch events: Unity's nativeInjectEvent asks "KeyEvent?" first and,
+   * answered yes, read a key code off the fake MotionEvent and dropped it (handled=0). */
+  { extern int wf_motion_is_event(const void *, const char *);
+    if (wf_motion_is_event(obj, NULL))
+      return (cn && (strstr(cn, "MotionEvent") || strstr(cn, "InputEvent"))) ? 1 : 0; }
   if (obj && *(uint32_t *)obj == TAG_STRING) {
     if (strstr(cn, "String")) return 1;
     if (strstr(cn, "Integer") || strstr(cn, "Long") || strstr(cn, "Float") ||
