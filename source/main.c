@@ -318,7 +318,8 @@ static void check_data(void) {
     "assets/bin/Data/Managed/Metadata/global-metadata.dat",
     "assets/bin/Data/boot.config",
     "assets/bin/Data/unity_app_guid",
-    "assets/aa/Android/catalog.json",
+    "assets/aa/catalog.bin",
+    "assets/aa/Android/scenes_scenes_mainmenuwarpforge.bundle",
   };
   char path[768];
   struct stat st;
