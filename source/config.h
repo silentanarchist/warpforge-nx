@@ -398,7 +398,11 @@
 #ifndef WF_MONO
 #define WF_MONO 0
 #endif
-#define WF_MONO_HEAP_MB 256u            /* carved off newlib's heap for Mono's fake mmap */
+/* Measured 2026-10-12: Mono's GC heap sits at 60 MB (35 used) through a whole
+ * session including a battle, while the C heap could not find a contiguous
+ * 128 MB block for the engine in battle. 128 leaves 2x headroom; the [mem]
+ * line's "mono N used, M heap of S" says when it needs raising. */
+#define WF_MONO_HEAP_MB 128u            /* carved off newlib's heap for Mono's fake mmap (was 256) */
 #define WF_MONO_HELLO   "mono_hello.dll" /* under the game folder; run before the game boots */
 
 #define DEBUG_LOG 1   /* warpforge: ON while bringing the port up */
