@@ -387,6 +387,14 @@
  * opensles_movie_begin() now picks whichever device is actually open and marks
  * it as the ring's sole drain, so there is nothing left to configure. */
 
+/* --- Mono runtime (mod milestone 1; see warpforge_mono.c) ---
+ * WF_MONO comes from the Makefile (0 for the plain game build). */
+#ifndef WF_MONO
+#define WF_MONO 0
+#endif
+#define WF_MONO_HEAP_MB 256u            /* carved off newlib's heap for Mono's fake mmap */
+#define WF_MONO_HELLO   "mono_hello.dll" /* under the game folder; run before the game boots */
+
 #define DEBUG_LOG 1   /* warpforge: ON while bringing the port up */
 
 /* Per-call file/mmap tracing. Each traced line is a log write, and log writes go

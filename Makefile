@@ -104,6 +104,34 @@ LIBS := -lSDL2 -lGLESv2 -lEGL -lglapi -ldrm_nouveau \
 
 LIBDIRS := $(PORTLIBS) $(LIBNX)
 
+# --- Mono runtime (mod milestone 1) ---------------------------------------
+# WF_MONO=1 links exelix11/mono-nx's interpreter-only Mono into the wrapper.
+# MONO_NX_SDK points at the extracted prebuilt SDK (mono-nx-sdk-linux-x64.zip,
+# release rel-3): headers, libmonosgen, the .NET native shims and ICU.
+WF_MONO     ?= 0
+MONO_NX_SDK ?= $(TOPDIR)/mono/sdk
+ifeq ($(WF_MONO),1)
+MONO_RT  := $(MONO_NX_SDK)/dotnet_runtime
+MONO_LIB := $(MONO_RT)/artifacts/obj/mono/libnx.arm64.Debug/out/lib
+MONO_NAT := $(MONO_RT)/artifacts/bin/native/net9.0-libnx-Debug-arm64
+MONO_ICU := $(MONO_NX_SDK)/icu/libnx
+SOURCES  += mono/shared mono/shared/ini
+INCLUDES += mono/shared
+CFLAGS   += -DWF_MONO=1 -I$(MONO_RT)/artifacts/bin/mono/libnx.arm64.Debug/include/mono-2.0 \
+            -I$(MONO_ICU)/include -DU_DISABLE_RENAMING=1 -DDLSHIM_DISABLE=0
+LIBS     += $(MONO_NAT)/libSystem.IO.Compression.Native.a \
+            $(MONO_NAT)/libSystem.Globalization.Native.a \
+            $(MONO_NAT)/libSystem.Native.a \
+            $(MONO_ICU)/lib/libicui18n.a $(MONO_ICU)/lib/libicuuc.a $(MONO_ICU)/lib/libicudata.a \
+            $(MONO_LIB)/libmonosgen-2.0.a \
+            $(MONO_LIB)/libmono-component-debugger-stub-static.a \
+            $(MONO_LIB)/libmono-component-diagnostics_tracing-stub-static.a \
+            $(MONO_LIB)/libmono-component-hot_reload-stub-static.a \
+            $(MONO_LIB)/libmono-component-marshal-ilgen-static.a \
+            $(MONO_RT)/artifacts/obj/mono/libnx.arm64.Debug/_deps/fetchzlibng-build/libz.a \
+            -pthread
+endif
+
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT  := $(CURDIR)/$(TARGET)
 export TOPDIR  := $(CURDIR)

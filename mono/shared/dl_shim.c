@@ -1,0 +1,168 @@
+#include "core.h"
+#include "dl_shim.h"
+
+#define REGISTER_LIBRARY(name, string, id) \
+	const intptr_t LibHandle_##name = (intptr_t)(0xABC00000 | id); \
+	const char* LibName_##name = string; \
+	void* getsym_##name(const char *name);
+
+#define CHECK_LIB_NAME(value, name) \
+do { \
+	if (strcmp(value, LibName_##name) == 0) {\
+		return (void *)LibHandle_##name; \
+	}\
+} while (0)
+
+// Core libraries
+REGISTER_LIBRARY(Libnx, "libnx", 0x01)
+REGISTER_LIBRARY(Internal, "__Internal", 0x02)
+REGISTER_LIBRARY(SystemNative, "libSystem.Native", 0x03)
+REGISTER_LIBRARY(GlobalizationNative, "libSystem.Globalization.Native", 0x04)
+REGISTER_LIBRARY(CompressionNative, "libSystem.IO.Compression.Native", 0x05)
+/* WARPFORGE: the game's own loaded .so modules (libil2cpp etc.), see below */
+static const intptr_t LibHandle_GameModules = (intptr_t)(0xABC00000 | 0x200);
+extern void *so_resolve_external(const char *name);
+
+// Optional libraries.
+// Don't forget to also register them in the LoadLibrary and GetSymbol functions below, otherwise they won't be found.
+#if defined(DLSHIM_SDL2)
+REGISTER_LIBRARY(SDL2, "SDL2", 0x100)
+#endif
+
+#if defined(DLSHIM_SDL2_IMAGE)
+REGISTER_LIBRARY(SDL2_image, "SDL2_image", 0x101)
+#endif
+
+#if defined(DLSHIM_CIMGUI)
+REGISTER_LIBRARY(Cimgui, "cimgui", 0x102)
+#endif
+
+#if defined(DLSHIM_OPENGL)
+REGISTER_LIBRARY(Egl, "libEGL.dll", 0x103)
+REGISTER_LIBRARY(Glad, "glad", 0x104)
+#endif
+
+#if defined(DLSHIM_OPENAL)
+REGISTER_LIBRARY(OpenAl, "openal32.dll", 0x105)
+#endif
+
+void *dlshim_loadLibrary(const char *name, int flags, char **err, void *user_data)
+{
+    if (!name)
+        return (void *)LibHandle_Internal;
+
+    CHECK_LIB_NAME(name, Libnx);
+    CHECK_LIB_NAME(name, Internal);
+    CHECK_LIB_NAME(name, SystemNative);
+    CHECK_LIB_NAME(name, GlobalizationNative);
+    CHECK_LIB_NAME(name, CompressionNative);
+
+    #if defined(DLSHIM_SDL2)
+	CHECK_LIB_NAME(name, SDL2);
+	#endif
+
+	#if defined(DLSHIM_SDL2_IMAGE)
+	CHECK_LIB_NAME(name, SDL2_image);
+	#endif
+
+	#if defined(DLSHIM_CIMGUI)
+	CHECK_LIB_NAME(name, Cimgui);
+	#endif	
+
+	#if defined(DLSHIM_OPENGL)
+	CHECK_LIB_NAME(name, Egl);
+	CHECK_LIB_NAME(name, Glad);
+	#endif
+	
+	#if defined(DLSHIM_OPENAL)
+	CHECK_LIB_NAME(name, OpenAl);
+	#endif	
+
+	/* WARPFORGE: any other library name (libil2cpp, libunity, GameAssembly,
+	 * RF_CNative_andr, the loader's own native lib...) resolves against the
+	 * game modules the wrapper loaded. One shared handle; the symbol lookup
+	 * walks every loaded module. */
+	if (g_config.mononx_logging)
+    	io_debugf("dlshim_loadLibrary %s -> game modules", name);
+    return (void *)LibHandle_GameModules;
+}
+
+void *dlshim_closeLibrary(void *handle, void *user_data)
+{
+    return NULL;
+}
+
+void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_data)
+{
+    void *symbol = NULL;
+	const char* resolvedLibrary = "<none>";
+
+#define CHECK_LIB_SYMBOL(libName) \
+	case LibHandle_##libName: \
+		resolvedLibrary = LibName_##libName; \
+		symbol = getsym_##libName(name);  \
+		break;
+
+	if (!handle)
+		return NULL;
+
+	switch ((intptr_t)handle)
+	{		
+		CHECK_LIB_SYMBOL(Libnx)
+		CHECK_LIB_SYMBOL(Internal)
+		CHECK_LIB_SYMBOL(SystemNative)
+		CHECK_LIB_SYMBOL(GlobalizationNative)
+		CHECK_LIB_SYMBOL(CompressionNative)
+
+	#if defined(DLSHIM_SDL2)
+		CHECK_LIB_SYMBOL(SDL2)
+	#endif
+
+	#if defined(DLSHIM_SDL2_IMAGE)
+		CHECK_LIB_SYMBOL(SDL2_image)
+	#endif
+
+	#if defined(DLSHIM_CIMGUI)
+		CHECK_LIB_SYMBOL(Cimgui)
+	#endif
+
+	#if defined(DLSHIM_OPENGL)
+		CHECK_LIB_SYMBOL(Egl)
+		CHECK_LIB_SYMBOL(Glad)
+	#endif
+
+	#if defined(DLSHIM_OPENAL)
+		CHECK_LIB_SYMBOL(OpenAl)
+	#endif
+	case 0xABC00200:   /* LibHandle_GameModules */
+		resolvedLibrary = "game modules";
+		symbol = so_resolve_external(name);
+		if (!symbol) {
+			/* the wrapper's own exports for managed code */
+			extern void wf_mono_log(const char *line);
+			if (!strcmp(name, "wf_mono_log")) symbol = (void *)wf_mono_log;
+		}
+		break;
+	}
+
+    if (symbol) {
+		if (g_config.mononx_logging)
+        	io_debugf("dlshim_getSymbol resolved: handle=%p lib=%s symbol=%s", handle, resolvedLibrary, name);
+
+        return symbol;
+	}
+
+    if (g_config.mononx_logging)
+        io_debugf("dlshim_getSymbol error: handle=%p lib=%s symbol=%s", handle, resolvedLibrary, name);
+
+    return NULL;
+}
+
+void* getsym_Internal(const char *name)
+{
+	if (strcmp(name, "console_ensure_init") == 0) return (void *)console_ensure_init;
+    else if (strcmp(name, "console_dispose") == 0) return (void *)console_dispose;
+    else if (strcmp(name, "console_update") == 0) return(void *)console_update;
+
+	return NULL;
+}

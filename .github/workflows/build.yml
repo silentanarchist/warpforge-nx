@@ -14,8 +14,25 @@ permissions:
   contents: write
 
 jobs:
+  managed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Build mono_hello
+        run: |
+          dotnet build managed/mono_hello -c Release -o out
+          ls -la out/mono_hello.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mono_hello
+          path: out/mono_hello.dll
+
   nro:
     runs-on: ubuntu-latest
+    needs: managed
     container: devkitpro/devkita64:latest
     steps:
       - uses: actions/checkout@v4
@@ -23,20 +40,62 @@ jobs:
       # The image ships the whole switch-portlibs group (mesa, libdrm_nouveau, SDL2, zlib,
       # libpng, ffmpeg). devkitPro bans CI runners from its package server, so nothing is
       # installed here; whatever the Makefile needs must already be in the image.
-      - name: Build
+      - name: Build (game only)
         run: |
           export DEVKITPRO=/opt/devkitpro
           make -j"$(nproc)"
           ls -la *.nro
 
+      # Mod milestone 1: a second .nro with the Mono runtime linked in. The
+      # prebuilt mono-nx SDK (exelix11/mono-nx, release rel-3) is fetched here;
+      # devkitPro's package server is not involved.
+      - name: Fetch the mono-nx SDK
+        run: |
+          apt-get update -qq && apt-get install -y -qq unzip zip curl >/dev/null
+          mkdir -p mono/sdk && cd mono/sdk
+          curl -sSL -o sdk.zip https://github.com/exelix11/mono-nx/releases/download/rel-3/mono-nx-sdk-linux-x64.zip
+          unzip -q sdk.zip && rm sdk.zip
+          ls
+
+      - name: Build (with Mono)
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          mv warpforge_nx.nro warpforge_nx.game.nro
+          make clean
+          make -j"$(nproc)" WF_MONO=1
+          mv warpforge_nx.nro warpforge_nx_mono.nro
+          mv warpforge_nx.game.nro warpforge_nx.nro
+          ls -la *.nro
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mono_hello
+          path: .
+
+      # The Mono runtime files for the SD card root (/mono): mono-nx's sd_files.zip
+      # minus its demos, with logging on. BCL = dotnet/runtime (MIT), ICU data.
+      - name: Package the /mono SD folder
+        run: |
+          mkdir -p sdpkg && cd sdpkg
+          curl -sSL -o sd.zip https://github.com/exelix11/mono-nx/releases/download/rel-3/sd_files.zip
+          unzip -q sd.zip "mono/*" && rm sd.zip
+          rm -f mono/mono_nx.nro mono/pad_input.dll
+          sed -i 's/^;logging = true/logging = true/; s/^default_assembly.*$/default_assembly  = \/mono\/none.dll/' mono/config.ini
+          zip -qr ../mono_sd.zip mono
+          cd .. && ls -la mono_sd.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: warpforge_nx
-          path: "*.nro"
+          path: |
+            *.nro
+            mono_hello.dll
+            mono_sd.zip
 
-      # Every push to main refreshes a rolling pre-release called "test" (one .nro,
-      # replaced each time), so a build can be tried on hardware without a version
-      # number. A pushed v* tag makes a proper release next to it.
+
+      # Every push to main refreshes a rolling pre-release called "test", so a
+      # build can be tried on hardware without a version number. A pushed v* tag
+      # makes a proper release next to it.
       - name: Test pre-release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -44,12 +103,18 @@ jobs:
           tag_name: test
           name: "Test build (latest main)"
           prerelease: true
-          body: "Rolling build of the latest commit on main (${{ github.sha }}). Untested unless the commit message says otherwise."
-          files: "*.nro"
+          body: "Rolling build of the latest commit on main (${{ github.sha }}). warpforge_nx.nro = game only; warpforge_nx_mono.nro = with the Mono runtime (needs mono_sd.zip unpacked to the SD root and mono_hello.dll in the game folder)."
+          files: |
+            *.nro
+            mono_hello.dll
+            mono_sd.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: "*.nro"
+          files: |
+            *.nro
+            mono_hello.dll
+            mono_sd.zip
           generate_release_notes: true

@@ -279,10 +279,25 @@ void __libnx_initheap(void) {
    * nothing and is harmless, though it does not by itself return physical pages
    * to the system. */
 
+#if WF_MONO
+  /* WARPFORGE: Mono's fake mmap gets one contiguous slice, taken off the top of
+   * newlib's heap, 4 MB aligned (its largest granularity). */
+  {
+    const size_t mono_sz = (size_t)WF_MONO_HEAP_MB * MB;
+    if (fake_heap_size > mono_sz + newlib_floor) {
+      fake_heap_size -= mono_sz;
+      uintptr_t lo = ((uintptr_t)addr + fake_heap_size + 0x3FFFFF) & ~(uintptr_t)0x3FFFFF;
+      uintptr_t hi = (uintptr_t)addr + fake_heap_size + mono_sz;
+      extern void wf_mono_heap_init(uintptr_t lo, uintptr_t hi);
+      wf_mono_heap_init(lo, hi);
+    }
+  }
+#endif
+
   fake_heap_start = (char *)addr;
   fake_heap_end   = (char *)addr + fake_heap_size;
 
-  heap_so_base  = (void *)ALIGN_MEM((uintptr_t)addr + fake_heap_size, 0x1000);
+  heap_so_base  = (void *)ALIGN_MEM((uintptr_t)addr + fake_heap_size + (WF_MONO ? (size_t)WF_MONO_HEAP_MB * MB : 0), 0x1000);
   heap_so_limit = so_zone;
 
   if (arena_sz) {
@@ -489,6 +504,15 @@ int main(int argc, char *argv[]) {
       debugPrintf("[oc] DISABLED: no usable stack hole -> heap-backed only\n");
     }
   }
+
+#if WF_MONO
+  /* Mod milestone 1: the Mono runtime in this process, a managed hello-world
+   * before the engine loads anything. */
+  {
+    extern int wf_mono_start(void), wf_mono_run_hello(void);
+    if (wf_mono_start() == 0) wf_mono_run_hello();
+  }
+#endif
 
   screen_width  = CP_FORCE_SCREEN_W;
   screen_height = CP_FORCE_SCREEN_H;

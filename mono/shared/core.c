@@ -1,0 +1,404 @@
+#include "core.h"
+#include "dl_shim.h"
+#include <unistd.h>
+#include <pthread.h>
+
+#include <mono/metadata/mono-debug.h>
+
+static PadState pad;
+static bool using_console = false;
+static bool is_applet = false;
+
+static pthread_mutex_t sockets_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile bool using_sockets = true;   /* WARPFORGE: main() initialised sockets */
+
+void socket_esnure_init_thread_safe()
+{    
+    pthread_mutex_lock(&sockets_mutex);
+    if (using_sockets) {
+        pthread_mutex_unlock(&sockets_mutex);
+        return;
+    }
+
+    using_sockets = true;
+
+    io_debugf("Initializing sockets");
+    Result rc = socketInitializeDefault();
+    if (R_FAILED(rc))
+    {
+        using_sockets = false;
+        pthread_mutex_unlock(&sockets_mutex);
+        io_debugf("Failed to init socketing: %08X", rc);
+        mnx_fatal_error("failed to init socketing");
+        return;
+    }
+
+    pthread_mutex_unlock(&sockets_mutex);
+}
+
+void socket_terminate()
+{
+    if (using_sockets)
+    {
+        io_debugf("Closing sockets");
+        socketExit();
+        using_sockets = false;
+    }
+}
+
+struct AppConfiguration g_config;
+
+void input_ensure_init()
+{
+    static bool initialized = false;
+
+    if (initialized)
+        return;
+
+    initialized = true;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
+}
+
+void console_ensure_init()
+{
+    if (io_has_stdio_redirection())
+        return;
+
+    if (using_console)
+        return;
+
+    using_console = true;
+    consoleInit(NULL);
+}
+
+void console_dispose()
+{
+    if (using_console)
+        consoleExit(NULL);
+
+    using_console = false;
+}
+
+void console_update()
+{
+    if (using_console)
+        consoleUpdate(NULL);
+}
+
+static bool try_show_error_applet(const char* title, const char* message)
+{
+    ErrorApplicationConfig arg = {0};    
+    Result rc = errorApplicationCreate(&arg, title, message);
+    if (R_FAILED(rc))
+    {
+        io_debugf("Failed to create error applet config: %08X", rc);
+        return false;
+    }
+
+    rc = errorApplicationShow(&arg);
+    if (R_FAILED(rc))
+    {
+        io_debugf("Failed to show error applet: %08X", rc);
+        return false;
+    }
+    
+    return true;
+}
+
+void mnx_fatal_error(const char *message)
+{
+    /* WARPFORGE: the wrapper owns the error UI (error.c). */
+    extern void fatal_error(const char *fmt, ...);
+    io_debugf("--- Fatal error ---");
+    if (message) io_debugf("%s", message);
+    fatal_error("mono: %s", message ? message : "(no message)");
+}
+
+void on_mono_log(const char *log_domain, const char *log_level, const char *message, mono_bool fatal, void *user_data)
+{
+    if (g_config.mono_runtime_logging)
+        io_debugf("%s %s %s", log_domain, log_level, message);
+
+    if (fatal)
+    {
+        io_debugf("Fatal error in Mono");
+        mnx_fatal_error(message);
+    }
+}
+
+void Mono_unhandledExceptionHook(MonoObject *exc, void *user_data)
+{
+    io_debugf("--- Unhandled exception ---");
+    MonoString *exc_str = mono_object_to_string(exc, NULL);
+    char *exc_cstr = mono_string_to_utf8(exc_str);    
+    
+    mnx_fatal_error(exc_cstr);
+    
+    mono_free(exc_cstr);
+}
+
+static char *inf_dup_unquote(const char *input)
+{
+    char* duplicate = io_strdup(input);    
+    if (!duplicate)
+    return NULL;
+    
+    char *s = duplicate;
+    int l = strlen(s);
+    if (l && s[0] == s[l - 1] && (s[0] == '\'' || s[0] == '"'))
+    {
+        s[l - 1] = '\0';
+        s++;
+    }
+
+    // Return a string that is safe to free
+    char* res = io_strdup(s);
+    free(duplicate);
+
+    return res;
+}
+
+static int handle_ini_line(void *user, const char *section, const char *name, const char *value)
+{
+    struct AppConfiguration *pconfig = (struct AppConfiguration *)user;
+
+#define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
+
+    if (MATCH("mono", "runtime_logging"))
+        pconfig->mono_runtime_logging = (strcmp(value, "true") == 0);
+    if (MATCH("mono", "logging"))
+        pconfig->mononx_logging = (strcmp(value, "true") == 0);
+    else if (MATCH("mono", "icu"))
+        pconfig->icudata_path = inf_dup_unquote(value);
+    else if (MATCH("mono", "assembly_dir"))
+        pconfig->assembly_dir = inf_dup_unquote(value);
+    else if (MATCH("mono", "config_dir"))
+        pconfig->config_dir = inf_dup_unquote(value);
+    else if (MATCH("mono", "default_assembly"))
+        pconfig->default_assembly = inf_dup_unquote(value);
+    else if (MATCH("mono", "enable_debug_server"))
+        pconfig->enable_debug_server = inf_dup_unquote(value);
+    else if (MATCH("nx", "svc_io_redirect"))
+        pconfig->svc_io_redirect = (strcmp(value, "true") == 0);
+    else if (MATCH("nx", "udp_io_redirect"))
+        pconfig->udp_io_redirect = inf_dup_unquote(value);
+    else if (MATCH("nx", "file_io_redirect"))
+        pconfig->file_io_redirect = inf_dup_unquote(value);
+    else if (MATCH("nx", "force_console_init"))
+        pconfig->force_console_init = (strcmp(value, "true") == 0);
+    else if (MATCH("nx", "exit_process_on_end"))
+        pconfig->exit_process_on_end = (strcmp(value, "true") == 0);
+    else if (MATCH("nx", "force_full_application"))
+        pconfig->force_full_application = (strcmp(value, "true") == 0);
+    else
+    {
+        return 0; /* unknown section/name, error */
+    }
+
+#undef MATCH
+
+    return 1;
+}
+
+// heap.c
+extern void heap_debug();
+
+bool application_initialize(const char* configFile)
+{
+    memset(&g_config, 0, sizeof(struct AppConfiguration));
+
+    if (ini_parse(configFile, handle_ini_line, &g_config) < 0)
+    {
+        io_debugf("Can't load app config from %s", configFile);
+        mnx_fatal_error("Can't load app config");
+        return false;
+    }
+    
+    AppletType at = appletGetAppletType();
+    if (at != AppletType_Application && at != AppletType_SystemApplication)
+        is_applet = true;
+
+    // Do this early so IO redirection doesn't kick off and we're sure that we can show a console error message if needed.
+    if (g_config.force_full_application)
+    {
+        if (is_applet)
+        {
+            mnx_fatal_error("This application can't run in applet mode. Relaunch with title takeover (Launch a game while pressing R).\n\n"
+                "When this application is launched in applet mode via the album icon it can use less memory and this is not supported. Press R while launching a game from the home menu to start the homebrew menu in full application mode where all of the system memory is available.\n");
+
+            return false;
+        }
+    }
+
+    if (g_config.mono_runtime_logging)
+        g_config.mononx_logging = true; // mononx_logging implies mono_runtime_logging
+
+    if (g_config.force_console_init)
+        console_ensure_init();
+    
+    // It's fine if this fails, the runtime has fallbacks for it.
+    csrngInitialize();
+
+    if (g_config.file_io_redirect)
+    {
+        if (io_stdio_to_file(g_config.file_io_redirect) < 0)
+        {
+            mnx_fatal_error("Failed to redirect stdio to file");
+            return false;
+        }
+    }
+    else if (g_config.udp_io_redirect)
+    {
+        socket_esnure_init_thread_safe();
+        if (io_stdio_to_udp(g_config.udp_io_redirect, 9999) < 0)
+        {
+            mnx_fatal_error("Failed to redirect stdio to udp");
+            return false;
+        }
+    }
+    else if (g_config.svc_io_redirect)
+    {
+        if (io_stdio_to_svc() < 0)
+        {
+            mnx_fatal_error("Failed to redirect stdio to svc");
+            return false;
+        }
+    }
+
+    heap_debug();
+
+    if (!g_config.config_dir || !g_config.assembly_dir || !g_config.icudata_path)
+    {
+        mnx_fatal_error("Some paths are missing from the config file");
+        return false;
+    }
+
+    if (!io_init_libicu(g_config.icudata_path, g_config.mononx_logging))
+    {
+        mnx_fatal_error("Libicu init failed");
+        return false;
+    }
+
+    mono_set_dirs(g_config.assembly_dir, g_config.config_dir);
+
+    if (g_config.enable_debug_server)
+    {
+        char* options[] = {
+            "--debugger-agent=transport=dt_socket,server=y,address=0.0.0.0:55555"
+        };
+
+        socket_esnure_init_thread_safe();
+
+        io_debugf("Debug server enabled on 0.0.0.0:55555 connect to resmue execution.");
+        
+        mono_jit_parse_options (1, options);
+		mono_debug_init (MONO_DEBUG_FORMAT_MONO);
+    }
+
+    return true;
+}
+
+void application_configure_mono()
+{
+    if (g_config.mono_runtime_logging)
+    {
+        mono_trace_set_log_handler(on_mono_log, NULL);
+        mono_trace_set_mask_string("all");
+        mono_trace_set_level_string("debug");
+    }
+
+#if !DLSHIM_DISABLE
+    mono_dl_fallback_register(dlshim_loadLibrary, dlshim_getSymbol, dlshim_closeLibrary, NULL);
+#else
+    #pragma message("dlshim disabled, make sure to build mono with direct-pinvoke for static linking of all extern functions")
+#endif
+
+    mono_install_unhandled_exception_hook(Mono_unhandledExceptionHook, NULL);
+}
+
+void application_terminate()
+{
+    io_debugf("Terminating application");
+
+    // These symbols are defined in mono and needed to clean up our hacks needed to get it to work on switch.
+    extern void mono_nx_jit_force_dispose(void);
+    mono_nx_jit_force_dispose();
+
+    extern void mono_nx_fakemmap_release(void);
+    mono_nx_fakemmap_release();
+    
+    csrngExit();
+    
+    io_stdio_finish();
+
+    socket_terminate();
+
+    console_dispose();
+
+    io_dispose_libicu();
+
+    if (g_config.icudata_path) free(g_config.icudata_path);
+    if (g_config.assembly_dir) free(g_config.assembly_dir);
+    if (g_config.config_dir) free(g_config.config_dir);
+    if (g_config.default_assembly) free(g_config.default_assembly);
+    if (g_config.udp_io_redirect) free(g_config.udp_io_redirect);
+    if (g_config.file_io_redirect) free(g_config.file_io_redirect);
+
+    if (g_config.exit_process_on_end) 
+    {
+        application_force_exit();
+    }
+}
+
+// Internal libnx symbol
+u32 __nx_applet_exit_mode = 0;
+
+void application_force_exit()
+{
+    // This forces libnx to always use applet exit + svcExitProcess
+    // Just calling svcExitProcess() will show an application error message while this exits "cleanly"
+    __nx_applet_exit_mode = 1;
+    // Terminate cleanly-enough
+    exit(0);
+}
+
+// Required by our mono build and called by System.Environment.Exit() in C#
+void mono_nx_exit(int code)
+{
+    io_debugf("mono_nx_exit(%d)", code);
+    application_force_exit();
+}
+
+void application_chdir_to_assembly(const char* path)
+{
+    int dirlen = strlen(path);
+    if (dirlen < 2)
+        return;
+    
+    char* dir = io_strdup(path);
+
+    bool found = false;
+    for (int i = dirlen - 1; i >= 0; i--)
+    {
+        if (dir[i] == '/')
+        {
+            // Avoid doing "/test" -> ""
+            if (i == 0)
+                dir[1] = '\0';
+            else 
+                dir[i] = '\0';
+            
+            found = true;
+            break;
+        }
+    }
+
+    if (found)
+    {    
+        io_debugf("chdir(%s)", dir);
+        chdir(dir);
+    }
+
+    free(dir);
+}
