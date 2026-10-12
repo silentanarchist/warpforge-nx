@@ -158,8 +158,10 @@ void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_da
 		resolvedLibrary = "game modules";
 		{
 			/* the wrapper's own exports for managed code come first */
-			extern void wf_mono_log(const char *line);
-			if (!strcmp(name, "wf_mono_log")) symbol = (void *)wf_mono_log;
+			extern void  wf_mono_log(const char *line);
+			extern void *wf_detour_install(void *target, void *replacement);
+			if      (!strcmp(name, "wf_mono_log"))       symbol = (void *)wf_mono_log;
+			else if (!strcmp(name, "wf_detour_install")) symbol = (void *)wf_detour_install;
 		}
 		if (!symbol && strncmp(name, "SystemNative_", 13) && strncmp(name, "GlobalizationNative_", 20))
 			symbol = so_resolve_external(name);
