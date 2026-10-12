@@ -23,6 +23,7 @@
  *
  * MIT.
  */
+#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
 #include <switch.h>

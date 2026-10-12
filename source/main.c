@@ -112,6 +112,28 @@ int crash_resolve_module(uintptr_t addr, char *name_out, size_t name_cap, uintpt
       return 1;
     }
   }
+  /* Our own image (the nro: wrapper + Mono): offsets resolve against warpforge_nx.elf. */
+  {
+    extern char __start__[], __end__[];   /* libnx switch.ld */
+    uintptr_t b = (uintptr_t)__start__, e = (uintptr_t)__end__;
+    if (addr >= b && addr < e) {
+      snprintf(name_out, name_cap, "warpforge_nx.nro");
+      *base_out = b;
+      return 1;
+    }
+  }
+#if WF_MONO
+  /* Detour trampolines (relocated first instructions of hooked methods). */
+  {
+    extern int wf_detour_region(uintptr_t *rx_base, size_t *size);
+    uintptr_t b = 0; size_t sz = 0;
+    if (wf_detour_region(&b, &sz) && addr >= b && addr < b + sz) {
+      snprintf(name_out, name_cap, "detour-trampolines");
+      *base_out = b;
+      return 1;
+    }
+  }
+#endif
   return 0;
 }
 

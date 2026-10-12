@@ -55,6 +55,14 @@ typedef struct { uintptr_t target; uint32_t orig[4]; } hooked_t;
 static hooked_t g_hooked[SLOT_COUNT];
 static unsigned g_hooked_n;
 
+/* For the crash handler: name addresses inside the trampoline region. */
+int wf_detour_region(uintptr_t *rx_base, size_t *size) {
+  if (!g_jit_ok) return 0;
+  *rx_base = (uintptr_t)jitGetRxAddr(&g_jit);
+  *size = REGION_BYTES;
+  return 1;
+}
+
 static int region_init(void) {
   if (g_jit_ok) return 0;
   Result rc = jitCreate(&g_jit, REGION_BYTES);

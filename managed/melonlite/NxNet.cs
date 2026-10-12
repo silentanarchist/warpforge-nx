@@ -141,7 +141,11 @@ namespace MelonLoader.Switch
             {
                 var tls = new SocketsHttpHandler
                 {
-                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(15),
+                    // The pool cannot tell that the server has hung up on an idle TLS
+                    // stream (it can poll a socket, not our stream), so a stale one is
+                    // reused and the request dies with "response ended prematurely".
+                    // Keep idle connections for less time than servers do (Node: 5 s).
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(4),
                     MaxConnectionsPerServer = MaxConnections,
                     ConnectCallback = async (ctx, ct) => await NxTlsStream.ConnectAsync(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port, ct).ConfigureAwait(false),
                 };

@@ -167,6 +167,21 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
         fp = next;
     }
 
+    /* What the object registers point at: a bad object header (an il2cpp object
+     * whose class word was overwritten, say) shows up here as the first words
+     * at x0; x8/x16/x17 are what the compiler and our stubs use for scratch. */
+    {
+        static const int regs[] = { 0, 1, 8, 16, 17, 19, 20, 21 };
+        for (unsigned i = 0; i < sizeof regs / sizeof *regs; i++) {
+            uintptr_t a = (uintptr_t)ctx->cpu_gprs[regs[i]].x & ~(uintptr_t)7;
+            if (a < 0x10000 || !mem_readable(a, 32)) continue;
+            const u64 *q = (const u64 *)a;
+            CLOG("[crash] *x%-2d @%016lx: %016lx %016lx %016lx %016lx\n", regs[i],
+                 (unsigned long)a, (unsigned long)q[0], (unsigned long)q[1],
+                 (unsigned long)q[2], (unsigned long)q[3]);
+        }
+    }
+
     /* stack hex dump around SP */
     uintptr_t sp = (uintptr_t)ctx->sp.x;
     if (mem_readable(sp, CRASH_STACK_BYTES)) {
