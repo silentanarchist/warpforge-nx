@@ -155,7 +155,10 @@ void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, 
   int action;
   if (p->phase == CP_TOUCH_DOWN)      { action = 0; g_down = 1; g_down_time = now_ms(); }
   else if (p->phase == CP_TOUCH_UP)   { if (!g_down) return; action = 1; g_down = 0; }
-  else if (p->phase == CP_TOUCH_MOVE) { if (!g_down) return; action = 2; }
+  /* No MOVE events: the engine folds them into its mouse state as relative
+   * motion (positions drifted, and each one re-fired a mousedown). Taps are
+   * what the mod's windows need; DOWN and UP carry absolute positions. */
+  else if (p->phase == CP_TOUCH_MOVE) return;
   else return;
 
   g_ev.action = action;
