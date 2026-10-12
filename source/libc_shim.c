@@ -1247,11 +1247,14 @@ static void oc_commit_locked(void *addr, size_t len) {
     Result rc = svcMapMemory(dst, src, (u64)run * MMAP_PAGE);
     if (R_FAILED(rc)) {
       MemoryInfo mi; u32 pi;
-      if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)dst)))
-        debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x -- there is already: type=0x%x perm=0x%x attr=0x%x at %p+0x%lx\n",
-                    dst, run, rc, mi.type, mi.perm, mi.attr, (void *)mi.addr, (unsigned long)mi.size);
-      else
-        debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x\n", dst, run, rc);
+      debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x -- the destination range holds:\n", dst, run, rc);
+      u64 q = (u64)(uintptr_t)dst, qend = q + (u64)run * MMAP_PAGE;
+      for (int k = 0; k < 8 && q < qend; k++) {
+        if (R_FAILED(svcQueryMemory(&mi, &pi, q))) break;
+        debugPrintf("[oc]   %p+0x%lx type=0x%x perm=0x%x attr=0x%x ipc=%u dev=%u\n",
+                    (void *)mi.addr, (unsigned long)mi.size, mi.type, mi.perm, mi.attr, mi.ipc_refcount, mi.device_refcount);
+        q = mi.addr + mi.size;
+      }
       if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)src)))
         debugPrintf("[oc]   source pool page %p: type=0x%x perm=0x%x attr=0x%x at %p+0x%lx\n",
                     src, mi.type, mi.perm, mi.attr, (void *)mi.addr, (unsigned long)mi.size);
