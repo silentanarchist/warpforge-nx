@@ -2016,6 +2016,10 @@ void *dlsym_fake(void *handle, const char *symbol) {
   extern void *wf_dlsym_interpose(const char *symbol);
   void *w = wf_dlsym_interpose(symbol);
   if (w) { debugPrintf("dlsym(%s) -> %p [interposed]\n", symbol, w); return w; }
+  /* 0b) texture uploads are logged (warpforge_gltrace.c) */
+  extern void *wf_gltrace_lookup(const char *symbol);
+  w = wf_gltrace_lookup(symbol);
+  if (w) { debugPrintf("dlsym(%s) -> %p [gltrace]\n", symbol, w); return w; }
   /* 1) a real export from a loaded module (il2cpp/unity/main) */
   void *p = so_resolve_external(symbol);
   if (p) return p;

@@ -21,6 +21,11 @@
 #include <string.h>
 #include <strings.h>
 #include <malloc.h>
+/* texture-upload tracing (warpforge_gltrace.c) */
+extern void wf_t_glTexImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+extern void wf_t_glTexSubImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+extern void wf_t_glCompressedTexImage2D(unsigned, int, unsigned, int, int, int, int, const void *);
+
 extern int z_strncasecmp(const char *, const char *, unsigned long);  /* NULL-safe, unity_imports.c */
 #include <unistd.h>
 #include <ctype.h>
@@ -944,7 +949,7 @@ DynLibFunction dynlib_functions[] = {
   { "glBufferData", (uintptr_t)&glBufferData }, { "glClear", (uintptr_t)&glClear },
   { "glClearColor", (uintptr_t)&glClearColor }, { "glClearDepthf", (uintptr_t)&glClearDepthf },
   { "glClearStencil", (uintptr_t)&glClearStencil }, { "glColorMask", (uintptr_t)&glColorMask },
-  { "glCompileShader", (uintptr_t)&glCompileShader }, { "glCompressedTexImage2D", (uintptr_t)&glCompressedTexImage2D },
+  { "glCompileShader", (uintptr_t)&glCompileShader }, { "glCompressedTexImage2D", (uintptr_t)&wf_t_glCompressedTexImage2D },
   { "glCreateProgram", (uintptr_t)&glCreateProgram }, { "glCreateShader", (uintptr_t)&glCreateShader },
   { "glCullFace", (uintptr_t)&glCullFace }, { "glDeleteBuffers", (uintptr_t)&glDeleteBuffers },
   { "glDeleteFramebuffers", (uintptr_t)&glDeleteFramebuffers }, { "glDeleteProgram", (uintptr_t)&glDeleteProgram },
@@ -965,8 +970,8 @@ DynLibFunction dynlib_functions[] = {
   { "glRenderbufferStorage", (uintptr_t)&glRenderbufferStorage }, { "glScissor", (uintptr_t)&glScissor },
   { "glShaderSource", (uintptr_t)&gl_ShaderSource_log }, { "glStencilFunc", (uintptr_t)&glStencilFunc },
   { "glStencilMask", (uintptr_t)&glStencilMask }, { "glStencilOp", (uintptr_t)&glStencilOp },
-  { "glTexImage2D", (uintptr_t)&glTexImage2D }, { "glTexParameteri", (uintptr_t)&glTexParameteri },
-  { "glTexSubImage2D", (uintptr_t)&glTexSubImage2D }, { "glUniform1fv", (uintptr_t)&glUniform1fv },
+  { "glTexImage2D", (uintptr_t)&wf_t_glTexImage2D }, { "glTexParameteri", (uintptr_t)&glTexParameteri },
+  { "glTexSubImage2D", (uintptr_t)&wf_t_glTexSubImage2D }, { "glUniform1fv", (uintptr_t)&glUniform1fv },
   { "glUniform1i", (uintptr_t)&glUniform1i }, { "glUniform2fv", (uintptr_t)&glUniform2fv },
   { "glUniform3fv", (uintptr_t)&glUniform3fv }, { "glUniform4fv", (uintptr_t)&glUniform4fv },
   { "glUniformMatrix4fv", (uintptr_t)&glUniformMatrix4fv }, { "glUseProgram", (uintptr_t)&glUseProgram },
