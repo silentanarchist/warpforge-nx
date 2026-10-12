@@ -34,7 +34,13 @@ namespace WarpforgeNx
 
         public static int Boot(string root)
         {
+            // The class library here is a Debug build: its file APIs assert that a full path
+            // starts with '/', and "sdmc:/switch/..." made Directory.CreateDirectory kill the
+            // process. libnx resolves "/switch/..." against the SD card (the default device).
+            if (root.StartsWith("sdmc:", StringComparison.OrdinalIgnoreCase)) root = root.Substring(5);
             Root = root;
+            // Debug.Assert in that Debug class library ends the process; log it and go on instead.
+            System.Diagnostics.Debug.SetProvider(new NxDebugProvider());
             Log($"loader: boot, root={root}");
             Log($"loader: {RuntimeInformation.FrameworkDescription}, Il2CppInterop.Runtime {typeof(Il2CppInteropRuntime).Assembly.GetName().Version}, HarmonyX {typeof(Harmony).Assembly.GetName().Version}");
             AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
@@ -195,6 +201,15 @@ namespace WarpforgeNx
             var r = IL2CPP.il2cpp_runtime_invoke(mi, IntPtr.Zero, null, ref exc);
             return exc != IntPtr.Zero ? "(threw)" : IL2CPP.Il2CppStringToManaged(r);
         }
+    }
+
+    sealed class NxDebugProvider : System.Diagnostics.DebugProvider
+    {
+        public override void Fail(string message, string detailMessage)
+        {
+            Entry.Log($"loader: Debug.Assert failed (ignored): {message} {detailMessage}\n{Environment.StackTrace}");
+        }
+        public override void Write(string message) { }
     }
 
     sealed class NxLogger : ILogger

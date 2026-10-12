@@ -110,8 +110,12 @@ namespace MelonLoader.Utils
     public static class MelonEnvironment
     {
         // Set by the Switch host (WarpforgeNx.Entry) before any mod loads.
-        internal static string Base = "sdmc:/switch/warpforge_nx/MelonLoader";
-        public static void Initialize(string melonLoaderDir) { Base = melonLoaderDir; }
+        internal static string Base = "/switch/warpforge_nx/MelonLoader";
+        public static void Initialize(string melonLoaderDir)
+        {
+            if (melonLoaderDir.StartsWith("sdmc:", StringComparison.OrdinalIgnoreCase)) melonLoaderDir = melonLoaderDir.Substring(5);
+            Base = melonLoaderDir;
+        }
         public static string MelonBaseDirectory => Base;
         public static string MelonLoaderDirectory => Base;
         public static string GameRootDirectory => System.IO.Path.GetDirectoryName(Base);
