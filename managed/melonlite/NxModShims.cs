@@ -13,12 +13,17 @@ namespace MelonLoader.Switch
 {
     static class NxModShims
     {
-        // type, method, parameter types (full names) -> replacement (static, same signature)
-        static readonly (string type, string method, string[] args, System.Reflection.MethodInfo with, string why)[] Shims =
+        // type, method, parameter types (full names) -> replacement (static). The replacement takes
+        // the same parameters, plus optionally extra ones read from static properties of the mod
+        // (type.property) appended after them.
+        static readonly (string type, string method, string[] args, System.Reflection.MethodInfo with, string[] extra, string why)[] Shims =
         {
             ("WarpforgeRevival.Net", "Client", new[] { "System.TimeSpan", "System.Boolean" },
-             typeof(NxHttp).GetMethod(nameof(NxHttp.Client)),
+             typeof(NxHttp).GetMethod(nameof(NxHttp.Client)), null,
              "https through the wrapper's TLS (Mono NX has none)"),
+            ("WarpforgeRevival.PlayFabTransport", "RewriteUrl", new[] { "System.String" },
+             typeof(NxHttp).GetMethod(nameof(NxHttp.RewriteUrl)), new[] { "WarpforgeRevival.RevivalMod.Config", "WarpforgeRevival.RevivalConfig.ServerUrl" },
+             "the game's PlayFab path already starts with /playfab on the Switch"),
         };
 
         public static byte[] Apply(string file)
@@ -40,6 +45,23 @@ namespace MelonLoader.Switch
                 body.Instructions.Clear(); body.Variables.Clear(); body.ExceptionHandlers.Clear();
                 var il = body.GetILProcessor();
                 for (int i = 0; i < m.Parameters.Count; i++) il.Emit(OpCodes.Ldarg, m.Parameters[i]);
+                if (s.extra != null)
+                {
+                    // a chain of static then instance property getters: "A.B.StaticProp", "C.D.InstanceProp" ...
+                    bool first = true;
+                    foreach (var e in s.extra)
+                    {
+                        int dot = e.LastIndexOf('.');
+                        var owner = asm.MainModule.GetType(e.Substring(0, dot));
+                        var member = e.Substring(dot + 1);
+                        var prop = owner?.Properties.FirstOrDefault(x => x.Name == member);
+                        var field = owner?.Fields.FirstOrDefault(x => x.Name == member);
+                        if (prop?.GetMethod != null) il.Emit(first ? OpCodes.Call : OpCodes.Callvirt, prop.GetMethod);
+                        else if (field != null) il.Emit(first ? OpCodes.Ldsfld : OpCodes.Ldfld, field);
+                        else throw new Exception("shim: member " + e + " not found");
+                        first = false;
+                    }
+                }
                 il.Emit(OpCodes.Call, asm.MainModule.ImportReference(s.with));
                 il.Emit(OpCodes.Ret);
                 MelonLogger.Msg($"[switch] {s.type}.{s.method} now uses {s.with.DeclaringType.Name}.{s.with.Name}: {s.why}");

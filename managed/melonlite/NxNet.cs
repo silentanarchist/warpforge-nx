@@ -106,6 +106,20 @@ namespace MelonLoader.Switch
     /// <summary>HttpClient whose https requests go over the wrapper's TLS.</summary>
     public static class NxHttp
     {
+        /// <summary>
+        /// Replaces WarpforgeRevival.PlayFabTransport.RewriteUrl. The Switch data prep already
+        /// points the game's PlayFab host at "<server>/playfab" (so the stock client works), so
+        /// the path the mod sees starts with "/playfab/" and the mod's own rewrite doubled it:
+        /// "/playfab/playfab/Client/Login..." -- which the server answers with an empty success.
+        /// </summary>
+        public static string RewriteUrl(string fullUrl, string serverUrl)
+        {
+            var uri = new Uri(fullUrl);
+            var pq = uri.PathAndQuery;
+            if (pq.StartsWith("/playfab/", StringComparison.OrdinalIgnoreCase)) pq = pq.Substring("/playfab".Length);
+            return serverUrl + "/playfab" + pq;
+        }
+
         const int MaxConnections = 8;   // as the mod's own Net.cs
         static NxHttpsHandler s_plain, s_zipped;
         static readonly object s_gate = new();
