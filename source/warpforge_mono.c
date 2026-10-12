@@ -55,6 +55,15 @@ static int           g_loader_ready;
 /* Managed code logs through this (DllImport("warpforge")). */
 void wf_mono_log(const char *line) { debugPrintf("[managed] %s\n", line ? line : "(null)"); }
 
+static void wf_on_mono_log(const char *domain, const char *level, const char *message, mono_bool fatal, void *ud) {
+  (void)ud;
+  debugPrintf("[mono] %s %s: %s\n", domain ? domain : "-", level ? level : "-", message ? message : "");
+  if (fatal) {
+    extern void mnx_fatal_error(const char *message);
+    mnx_fatal_error(message);
+  }
+}
+
 int wf_mono_start(void) {
   debugPrintf("[mono] heap slice %p..%p (%u MB)\n", (void *)g_mono_lo, (void *)g_mono_hi,
               (unsigned)((g_mono_hi - g_mono_lo) >> 20));
@@ -81,8 +90,25 @@ int wf_mono_start(void) {
     g_config.assembly_dir = dirs;
     debugPrintf("[mono] assembly dirs: %s\n", dirs);
   }
+  /* Console output of the managed side (Environment.FailFast messages, unhandled
+   * exceptions, Console.WriteLine) goes to stdout/stderr, which nothing showed:
+   * a run died after "SystemNative_SysLog" with no reason visible. Send both to
+   * a file beside debug.log. */
+  {
+    char cpath[640];
+    snprintf(cpath, sizeof cpath, "%s/console.log", cp_game_root());
+    if (freopen(cpath, "w", stdout)) setvbuf(stdout, NULL, _IOLBF, 0);
+    if (freopen(cpath, "a", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+    debugPrintf("[mono] stdout/stderr -> %s\n", cpath);
+  }
   mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP_ONLY);
   application_configure_mono();
+  /* Mono's own errors and warnings (asserts, type-load failures) into debug.log
+   * even when runtime_logging is off. */
+  if (!g_config.mono_runtime_logging) {
+    mono_trace_set_log_handler(wf_on_mono_log, NULL);
+    mono_trace_set_level_string("warning");
+  }
   g_domain = mono_jit_init("warpforge_nx");
   if (!g_domain) {
     debugPrintf("[mono] mono_jit_init failed\n");

@@ -30,6 +30,7 @@ namespace MelonLoader.Switch
 
         static void LoadMod(string file)
         {
+            MelonLogger.Msg($"Loading {Path.GetFileName(file)} ...");
             var asm = Assembly.LoadFrom(file);
             var info = asm.GetCustomAttribute<MelonInfoAttribute>();
             if (info == null) { MelonLogger.Warning($"{Path.GetFileName(file)} has no [MelonInfo] -- not a mod, skipped"); return; }
@@ -51,6 +52,7 @@ namespace MelonLoader.Switch
             MelonLogger.Msg($"Loaded {melon.MelonTypeName} \"{info.Name}\" v{info.Version} by {info.Author}{(ma.HarmonyDontPatchAll ? " (applies its own patches)" : "")}");
 
             var clock = System.Diagnostics.Stopwatch.StartNew();
+            MelonLogger.Msg($"{info.Name}: OnInitializeMelon ...");
             Call(melon, "OnEarlyInitializeMelon", m => m.OnEarlyInitializeMelon());
             Call(melon, "OnInitializeMelon", m => m.OnInitializeMelon());
             if (!ma.HarmonyDontPatchAll)

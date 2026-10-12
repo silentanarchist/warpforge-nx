@@ -48,25 +48,56 @@ namespace WarpforgeNx
                 return null;
             };
             AppDomain.CurrentDomain.UnhandledException += (_, e) => Log("loader: UNHANDLED " + e.ExceptionObject);
+            SetTrustedPlatformAssemblies();
             return 0;
         }
 
         static bool s_modsLoaded;
+
+        // Mono.Cecil (used by HarmonyX/MonoMod to build delegate types for every patch) finds
+        // framework assemblies through the TRUSTED_PLATFORM_ASSEMBLIES list a normal .NET host
+        // provides. Mono NX provides none, so the first patch failed with "Failed to resolve
+        // assembly: System.Private.CoreLib". Hand it the class library folders.
+        static void SetTrustedPlatformAssemblies()
+        {
+            try
+            {
+                var dirs = new System.Collections.Generic.List<string>();
+                var corelibDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+                if (!string.IsNullOrEmpty(corelibDir)) dirs.Add(corelibDir);
+                foreach (var d in new[] { "/mono/lib_net9.0", "/mono/framework_net9.0" })
+                    if (Directory.Exists(d) && !dirs.Contains(d)) dirs.Add(d);
+                var files = dirs.SelectMany(d => Directory.GetFiles(d, "*.dll"))
+                                .Where(f => f.IndexOf(Path.PathSeparator) < 0)   // "sdmc:" paths cannot be listed
+                                .ToArray();
+                AppDomain.CurrentDomain.SetData("TRUSTED_PLATFORM_ASSEMBLIES", string.Join(Path.PathSeparator, files));
+                Log($"loader: {files.Length} framework assemblies listed for Cecil ({string.Join(", ", dirs)})");
+            }
+            catch (Exception e) { Log("loader: could not list framework assemblies: " + e.Message); }
+        }
 
         public static int OnIl2CppReady()
         {
             try { StackProbe(); }
             catch (Exception e) { Log("loader: stack probe FAILED -- " + e); }
             if (s_runtime == null) { Log("loader: Il2CppInterop is not running -- mods not loaded"); return -1; }
-            try
+            Log("loader: starting MelonLoader-lite ...");
+            try { StartMelonLite(); }
+            catch (Exception e) { Log("loader: loading mods FAILED -- " + e); }
+            return 0;
+        }
+
+        // separate method: the interpreter loads MelonLoader.dll when it compiles this one,
+        // so a failure there is caught above, after the line saying where we are
+        static void StartMelonLite()
+        {
             {
                 MelonLoader.Utils.MelonEnvironment.Initialize(MelonDir);
+                Log("loader: MelonLoader-lite loaded, looking for mods ...");
                 int n = MelonLoader.Switch.NxHost.LoadMods();
                 s_modsLoaded = true;
                 Log($"loader: {n} mod(s) loaded");
             }
-            catch (Exception e) { Log("loader: loading mods FAILED -- " + e); }
-            return 0;
         }
 
         public static void OnUpdate()
