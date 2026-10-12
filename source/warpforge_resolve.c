@@ -62,8 +62,42 @@ int wf_resolve_bind(so_module *il2cpp) {
   return ok ? 0 : -1;
 }
 
+/* il2cpp_init / il2cpp_init_utf16 are reached by libunity through dlsym; the
+ * fake dlsym hands back these wrappers, which call the real export and then
+ * raise the flag. NEVER probe the runtime for readiness instead: on the first
+ * hardware run, calling il2cpp_domain_get() before il2cpp_init crashed the
+ * process in frame 0 -- the domain is created lazily, not reported absent. */
+static volatile int g_runtime_up;
+
+static int wf_il2cpp_init_wrap(const char *domain_name) {
+  typedef int (*fn)(const char *);
+  fn real = (fn)so_resolve_external("il2cpp_init");
+  debugPrintf("[resolve] il2cpp_init(%s) -> real %p\n", domain_name ? domain_name : "(null)", (void *)real);
+  int r = real ? real(domain_name) : 0;
+  g_runtime_up = 1;
+  debugPrintf("[resolve] il2cpp_init returned %d -- runtime is up\n", r);
+  return r;
+}
+
+static int wf_il2cpp_init_utf16_wrap(const void *domain_name) {
+  typedef int (*fn)(const void *);
+  fn real = (fn)so_resolve_external("il2cpp_init_utf16");
+  debugPrintf("[resolve] il2cpp_init_utf16 -> real %p\n", (void *)real);
+  int r = real ? real(domain_name) : 0;
+  g_runtime_up = 1;
+  debugPrintf("[resolve] il2cpp_init_utf16 returned %d -- runtime is up\n", r);
+  return r;
+}
+
+void *wf_dlsym_interpose(const char *symbol) {
+  if (!symbol) return NULL;
+  if (!strcmp(symbol, "il2cpp_init"))       return (void *)wf_il2cpp_init_wrap;
+  if (!strcmp(symbol, "il2cpp_init_utf16")) return (void *)wf_il2cpp_init_utf16_wrap;
+  return NULL;
+}
+
 int wf_resolve_ready(void) {
-  return p_domain_get && p_domain_get() != NULL;
+  return g_runtime_up && p_domain_get != NULL;
 }
 
 void *wf_resolve_method(const char *assembly, const char *ns, const char *klass,

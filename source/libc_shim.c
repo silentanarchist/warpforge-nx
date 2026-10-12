@@ -1955,6 +1955,11 @@ void *dlsym_fake(void *handle, const char *symbol) {
   if (!symbol) return NULL;
   /* Firebase SWIG stub resolver (firebase_stub.c) -- see step 2b below. */
   extern void *firebase_stub_lookup(const char *symbol);
+  /* 0) WARPFORGE: il2cpp_init is wrapped so the port learns when the runtime is
+   *    up without ever probing it (warpforge_resolve.c). */
+  extern void *wf_dlsym_interpose(const char *symbol);
+  void *w = wf_dlsym_interpose(symbol);
+  if (w) { debugPrintf("dlsym(%s) -> %p [interposed]\n", symbol, w); return w; }
   /* 1) a real export from a loaded module (il2cpp/unity/main) */
   void *p = so_resolve_external(symbol);
   if (p) return p;

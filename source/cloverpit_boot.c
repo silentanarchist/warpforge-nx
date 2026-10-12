@@ -236,14 +236,17 @@ int cp_boot_and_run(void) {
     /* Re-sizes the NWindow when the console is docked or undocked. The reference
      * calls this every frame rather than off the applet hook, because the hook
      * does not fire for operation-mode changes. */
+    if (frame_no < 2) debugPrintf("[loop] frame %llu: update_mode\n", (unsigned long long)frame_no);
     android_native_update_mode();
 
     /* WARPFORGE: install the managed hooks on the first frame the runtime is up. */
+    if (frame_no < 2) debugPrintf("[loop] frame %llu: hooks_tick\n", (unsigned long long)frame_no);
     wf_hooks_tick();
 
     /* Samples deltaTime for the managed Time hooks. Must be once per frame. */
     cp_time_tick();
 
+    if (frame_no < 2) debugPrintf("[loop] frame %llu: pump_input\n", (unsigned long long)frame_no);
     if (U.injectEvent)
       cp_pump_input(fake_env, fake_unityplayer_thiz, U.injectEvent);
 
