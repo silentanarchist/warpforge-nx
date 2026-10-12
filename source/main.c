@@ -114,9 +114,16 @@ int crash_resolve_module(uintptr_t addr, char *name_out, size_t name_cap, uintpt
   }
   /* Our own image (the nro: wrapper + Mono): offsets resolve against warpforge_nx.elf. */
   {
-    extern char __start__[], __end__[];   /* libnx switch.ld */
-    uintptr_t b = (uintptr_t)__start__, e = (uintptr_t)__end__;
-    if (addr >= b && addr < e) {
+    /* __start__ is the link address (0); the load address comes from the memory
+     * map of our own code, and __end__ (also link-relative) is the image size. */
+    extern char __end__[];   /* libnx switch.ld */
+    static uintptr_t nro_base;
+    if (!nro_base) {
+      MemoryInfo mi; u32 pi;
+      if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)&crash_resolve_module))) nro_base = (uintptr_t)mi.addr;
+    }
+    uintptr_t b = nro_base, e = nro_base + (uintptr_t)__end__;
+    if (b && addr >= b && addr < e) {
       snprintf(name_out, name_cap, "warpforge_nx.nro");
       *base_out = b;
       return 1;

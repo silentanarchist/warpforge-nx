@@ -124,7 +124,37 @@ static void mark_sock(int fd, int on) {
   else    g_is_sock[fd >> 3] &= (uint8_t)~(1u << (fd & 7));
 }
 int wf_net_is_socket(int fd) { return is_sock(fd); }
-void wf_net_forget(int fd) { mark_sock(fd, 0); }
+
+/* Sockets being shut down. Horizon's shutdown() does not wake a thread blocked in
+ * recv()/poll() on the same socket, so il2cpp's Socket.Close (which shuts the
+ * socket down, then waits for its receive thread to come out) sat for 20 s on
+ * the main thread every time Photon dropped a connection -- the 20 s menu
+ * freezes. Blocking waits below are done in 100 ms slices and watch this flag. */
+static uint8_t g_closing[1024 / 8];
+static int is_closing(int fd) { return fd >= 0 && fd < 1024 && (g_closing[fd >> 3] >> (fd & 7)) & 1; }
+static void set_closing(int fd, int on) {
+  if (fd < 0 || fd >= 1024) return;
+  if (on) g_closing[fd >> 3] |= (uint8_t)(1u << (fd & 7));
+  else    g_closing[fd >> 3] &= (uint8_t)~(1u << (fd & 7));
+}
+void wf_net_forget(int fd) { mark_sock(fd, 0); set_closing(fd, 0); }
+
+static int fd_nonblocking(int fd) { int fl = fcntl(fd, F_GETFL, 0); return fl >= 0 && (fl & O_NONBLOCK); }
+
+/* Wait until `fd` is ready for `events` (POLLIN/POLLOUT), the socket is shut
+ * down (returns 0: EOF), or it is switched to non-blocking under us (returns -1
+ * with errno EAGAIN). >0 = ready. Only used for blocking sockets. */
+static int wait_ready(int fd, short events) {
+  for (;;) {
+    if (is_closing(fd)) return 0;
+    struct pollfd p = { .fd = fd, .events = events };
+    int r = poll(&p, 1, 100);
+    if (r > 0) return 1;
+    if (r < 0 && errno != EINTR) return 1;      /* let the real call report it */
+    if (is_closing(fd)) return 0;
+    if (fd_nonblocking(fd)) { errno = EAGAIN; return -1; }
+  }
+}
 
 static int lerrno(int e) {
   switch (e) {
@@ -225,7 +255,14 @@ static int flags_to_bsd(int lf) {
   return f;
 }
 long wf_send(int fd, const void *buf, size_t len, int lf) { return ret_l(send(fd, buf, len, flags_to_bsd(lf))); }
-long wf_recv(int fd, void *buf, size_t len, int lf)       { return ret_l(recv(fd, buf, len, flags_to_bsd(lf))); }
+long wf_recv(int fd, void *buf, size_t len, int lf) {
+  if (!(lf & L_MSG_DONTWAIT) && !fd_nonblocking(fd)) {
+    int w = wait_ready(fd, POLLIN);
+    if (w == 0) return 0;                       /* shut down: end of stream */
+    if (w < 0) FAIL(errno);
+  }
+  return ret_l(recv(fd, buf, len, flags_to_bsd(lf)));
+}
 long wf_sendto(int fd, const void *buf, size_t len, int lf, const void *la, unsigned llen) {
   if (!la) return wf_send(fd, buf, len, lf);
   struct sockaddr_in b;
@@ -233,6 +270,11 @@ long wf_sendto(int fd, const void *buf, size_t len, int lf, const void *la, unsi
   return ret_l(sendto(fd, buf, len, flags_to_bsd(lf), (struct sockaddr *)&b, sizeof b));
 }
 long wf_recvfrom(int fd, void *buf, size_t len, int lf, void *la, unsigned *llen) {
+  if (!(lf & L_MSG_DONTWAIT) && !fd_nonblocking(fd)) {
+    int w = wait_ready(fd, POLLIN);
+    if (w == 0) return 0;
+    if (w < 0) FAIL(errno);
+  }
   struct sockaddr_in b; socklen_t bl = sizeof b;
   long r = recvfrom(fd, buf, len, flags_to_bsd(lf), la ? (struct sockaddr *)&b : NULL, la ? &bl : NULL);
   if (r < 0) FAIL(errno);
@@ -265,7 +307,7 @@ long wf_recvmsg(int fd, struct l_msghdr *m, int lf) {
   return r;
 }
 
-int wf_shutdown(int fd, int how) { return ret_i(shutdown(fd, how)); }
+int wf_shutdown(int fd, int how) { set_closing(fd, 1); return ret_i(shutdown(fd, how)); }
 
 static int so_to_bsd(int lv, int on, int *blv, int *bon) {
   if (lv == L_SOL_SOCKET) {
@@ -362,10 +404,24 @@ int wf_poll(struct l_pollfd *fds, unsigned long nfds, int timeout) {
     p[i].events = fds[i].events;
     if (p[i].fd >= 0) nvalid++;
   }
-  int r;
-  if (nvalid) r = poll(p, nfds, timeout);
+  int r = 0, e = 0;
+  if (nvalid) {
+    /* in slices, so a socket shut down by another thread is reported (POLLHUP)
+     * instead of the wait lasting until its timeout */
+    int left = timeout;
+    for (;;) {
+      int hup = 0;
+      for (unsigned long i = 0; i < nfds; i++)
+        if (p[i].fd >= 0 && is_closing(p[i].fd)) { p[i].revents = POLLHUP; hup++; }
+      if (hup) { r = hup; break; }
+      int slice = (left < 0 || left > 100) ? 100 : left;
+      r = poll(p, nfds, slice);
+      e = errno;
+      if (r != 0 || left == 0) break;
+      if (left > 0) { left -= slice; if (left <= 0) break; }
+    }
+  }
   else { if (timeout > 0) svcSleepThread((int64_t)timeout * 1000000); r = 0; }
-  int e = errno;
   int n = 0;
   for (unsigned long i = 0; i < nfds; i++) {
     fds[i].revents = (p[i].fd >= 0) ? p[i].revents : (fds[i].fd >= 0 ? POLLNVAL : 0);

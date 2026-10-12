@@ -1218,7 +1218,15 @@ static void oc_commit_locked(void *addr, size_t len) {
     void *src = oc_pool + oc_pool_bump * MMAP_PAGE;
     Result rc = svcMapMemory(dst, src, (u64)run * MMAP_PAGE);
     if (R_FAILED(rc)) {
-      debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x\n", dst, run, rc);
+      MemoryInfo mi; u32 pi;
+      if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)dst)))
+        debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x -- there is already: type=0x%x perm=0x%x attr=0x%x at %p+0x%lx\n",
+                    dst, run, rc, mi.type, mi.perm, mi.attr, (void *)mi.addr, (unsigned long)mi.size);
+      else
+        debugPrintf("[oc] svcMapMemory FAIL dst=%p run=%zu rc=0x%x\n", dst, run, rc);
+      if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)src)))
+        debugPrintf("[oc]   source pool page %p: type=0x%x perm=0x%x attr=0x%x at %p+0x%lx\n",
+                    src, mi.type, mi.perm, mi.attr, (void *)mi.addr, (unsigned long)mi.size);
       return;
     }
     memset(dst, 0, run * MMAP_PAGE);   // freshly committed anon must read as zero

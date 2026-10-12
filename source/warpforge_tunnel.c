@@ -68,6 +68,7 @@ static void carry(void *arg) {
 
   unsigned char buf[16384];
   const char *why = "closed";
+  long up = 0, down = 0; unsigned nup = 0, ndown = 0;
   for (;;) {
     struct pollfd p[2] = { { .fd = local, .events = POLLIN }, { .fd = wf_tls_fd(tls), .events = POLLIN } };
     int pending = wf_tls_pending(tls);
@@ -78,11 +79,13 @@ static void carry(void *arg) {
       ssize_t n = recv(local, buf, sizeof buf, 0);
       if (n <= 0) { why = n == 0 ? "the game closed it" : "recv failed"; break; }
       if (wf_tls_write(tls, buf, (int)n) < 0) { why = "TLS write failed"; break; }
+      up += n; if (++nup <= 3) debugPrintf("[tunnel] %d: game -> server %d bytes\n", local, (int)n);
     }
     if (pending || (p[1].revents & (POLLIN | POLLHUP | POLLERR))) {
       int n = wf_tls_read(tls, buf, (int)sizeof buf);
       if (n == 0) { why = "the server closed it"; break; }
       if (n < 0) { why = "TLS read failed"; break; }
+      down += n; if (++ndown <= 3) debugPrintf("[tunnel] %d: server -> game %d bytes\n", local, n);
       int done = 0;
       while (done < n) {
         ssize_t w = send(local, buf + done, (size_t)(n - done), 0);
@@ -92,7 +95,7 @@ static void carry(void *arg) {
       if (done < n) break;
     }
   }
-  debugPrintf("[tunnel] match connection %d ended: %s\n", local, why);
+  debugPrintf("[tunnel] match connection %d ended: %s (%ld bytes up, %ld down)\n", local, why, up, down);
   wf_tls_close(tls);
   shutdown(local, SHUT_RDWR);
   close(local);
