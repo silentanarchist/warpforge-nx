@@ -146,7 +146,11 @@ void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, 
   g_ev.count = 1;
   g_ev.ids[0] = 0;
   g_ev.x[0] = p->x;
-  g_ev.y[0] = (float)CP_FORCE_SCREEN_H - p->y;    /* bottom-left -> top-left */
+  /* Measured on hardware: IMGUI reports a touch injected at y as 1080 + y (the
+   * engine's flip runs against a zero height; nativeSetInputArea did not change
+   * it). Handing it y - 1080, i.e. minus the bottom-left y, lands it where it
+   * was tapped. */
+  g_ev.y[0] = -p->y;
   g_ev.event_time = now_ms();
   g_ev.down_time = g_down_time;
 
