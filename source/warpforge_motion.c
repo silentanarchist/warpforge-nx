@@ -69,16 +69,37 @@ int wf_motion_is_event(const void *recv, const char *cls) {
 #define SNAP_N 64
 static struct { const void *obj; wf_motion_t ev; } g_snaps[SNAP_N];
 static unsigned g_snap_next;
+
+/* Distinct event objects. jni_make_object pools ONE object per label, so every
+ * event -- the DOWN, the engine's queued copy of it, the UP -- was the same
+ * pointer and read whichever snapshot was newest: mixed-up presses, phantom
+ * keyboards. These have the FakeObject layout (tag, label) and the pooled tag,
+ * which free_ref ignores. */
+typedef struct { uint32_t tag; char label[64]; } motion_obj_t;
+static motion_obj_t g_objs[SNAP_N];
+static unsigned g_obj_next;
+static void *motion_new_object(void) {
+  motion_obj_t *o = &g_objs[g_obj_next++ % SNAP_N];
+  o->tag = 0x434c5331u;                       /* TAG_CLASS */
+  strcpy(o->label, "wf/motion");
+  return o;
+}
 static void snap_store(const void *obj, const wf_motion_t *ev) {
+  for (unsigned i = 0; i < SNAP_N; i++) if (g_snaps[i].obj == obj) g_snaps[i].obj = NULL;
   g_snaps[g_snap_next % SNAP_N].obj = obj; g_snaps[g_snap_next % SNAP_N].ev = *ev; g_snap_next++;
 }
+/* Most recent entry first: event objects are pooled, so an address comes back
+ * for a later event and the older entry under it must lose. */
 static const wf_motion_t *snap_find(const void *obj) {
-  for (unsigned i = 0; i < SNAP_N; i++) if (g_snaps[i].obj == obj) return &g_snaps[i].ev;
+  for (unsigned k = 0; k < SNAP_N; k++) {
+    unsigned i = (g_snap_next - 1 - k) % SNAP_N;
+    if (g_snaps[i].obj == obj) return &g_snaps[i].ev;
+  }
   return &g_ev;
 }
 /* MotionEvent.obtain(event): a copy with the same state. recycle(): nothing. */
 void *wf_motion_obtain(const void *src) {
-  void *o = jni_make_object("wf/motion");
+  void *o = motion_new_object();
   snap_store(o, snap_find(src));
   return o;
 }
@@ -141,7 +162,7 @@ void wf_motion_release(void) {
   if (!g_down || !g_inject) { g_down = 0; return; }
   g_down = 0;
   g_ev.action = 1; g_ev.count = 1; g_ev.ids[0] = 0; g_ev.event_time = now_ms(); g_ev.down_time = g_down_time;
-  void *ev = jni_make_object("wf/motion");
+  void *ev = motion_new_object();
   snap_store(ev, &g_ev);
   uint8_t handled = g_inject(g_env, g_thiz, ev, WF_DEVICE_TOUCH);
   debugPrintf("[motion] released after the keyboard -> handled=%u\n", handled);
@@ -188,7 +209,7 @@ void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, 
       else debugPrintf("[motion] nativeSetInputArea not registered\n");
     }
   }
-  void *ev = jni_make_object("wf/motion");
+  void *ev = motion_new_object();
   snap_store(ev, &g_ev);
   uint8_t handled = inject(env, thiz, ev, WF_DEVICE_TOUCH);
   if (g_logged < 6) {
