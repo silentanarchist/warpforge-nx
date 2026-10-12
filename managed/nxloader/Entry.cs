@@ -126,6 +126,8 @@ namespace WarpforgeNx
                 int n = MelonLoader.Switch.NxHost.LoadMods();
                 s_modsLoaded = true;
                 Log($"loader: {n} mod(s) loaded");
+                try { NxUnityHost.Create(); }
+                catch (Exception e) { Log("loader: could not inject the Unity component (no OnGUI for mods) -- " + e); }
             }
         }
 

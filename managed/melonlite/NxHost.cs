@@ -97,8 +97,25 @@ namespace MelonLoader.Switch
             }
         }
 
+        static readonly Dictionary<MelonBase, int> s_guiErrors = new();
+        public static void OnGUI()
+        {
+            foreach (var m in s_melons)
+            {
+                try { m.OnGUI(); }
+                catch (Exception e)
+                {
+                    s_guiErrors.TryGetValue(m, out var n);
+                    s_guiErrors[m] = ++n;
+                    if (n <= 5 || n % 1000 == 0) MelonLogger.Error($"{m.Info?.Name}.OnGUI threw (#{n})", e);
+                }
+            }
+        }
+
+        static bool s_quit;
         public static void Quit()
         {
+            if (s_quit) return; s_quit = true;
             foreach (var m in s_melons) Call(m, "OnApplicationQuit", x => x.OnApplicationQuit());
         }
     }
