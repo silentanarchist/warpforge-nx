@@ -1,0 +1,25 @@
+diff --git a/Il2CppInterop.HarmonySupport/Il2CppDetourMethodPatcher.cs b/Il2CppInterop.HarmonySupport/Il2CppDetourMethodPatcher.cs
+index d628ef0..ebbb6cb 100644
+--- a/Il2CppInterop.HarmonySupport/Il2CppDetourMethodPatcher.cs
++++ b/Il2CppInterop.HarmonySupport/Il2CppDetourMethodPatcher.cs
+@@ -163,9 +163,17 @@ internal unsafe class Il2CppDetourMethodPatcher : MethodPatcher
+                 Original.DeclaringType?.Name + "." + Original.Name);
+         modifiedNativeMethodInfo.MethodPointer = nativeDetour.OriginalTrampoline;
+ 
+-        var detour = new Detour(Original, managedHookedMethod);
+-        detour.Apply();
+-        DetourCache.Add(detour);
++        // warpforge_nx (Switch): the managed shortcut below detours Mono-compiled code with
++        // MonoMod, which an interpreter-only runtime cannot do (there is no machine code to
++        // patch, and the code memory cannot be made writable that way). Without it, managed
++        // callers of the proxy go through the native detour above instead -- the original
++        // behaviour before upstream #237. The host turns this on with an AppContext switch.
++        if (!(AppContext.TryGetSwitch("Il2CppInterop.HarmonySupport.NoManagedDetour", out var noManaged) && noManaged))
++        {
++            var detour = new Detour(Original, managedHookedMethod);
++            detour.Apply();
++            DetourCache.Add(detour);
++        }
+ 
+         return managedHookedMethod;
+     }

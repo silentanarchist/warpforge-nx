@@ -105,12 +105,16 @@ namespace WarpforgeNx
             var unityVersionProp = appType.GetProperty("unityVersion", BindingFlags.Public | BindingFlags.Static);
             Log($"loader: proxy Application.unityVersion = \"{unityVersionProp?.GetValue(null)}\"");
 
-            // 4. a Harmony patch on a game method through the proxies -> Il2CppDetourMethodPatcher -> NxDetourProvider
+            // 4. a Harmony patch on a game method through the proxies -> Il2CppDetourMethodPatcher -> NxDetourProvider.
+            //    No MonoMod managed detour under the interpreter (see il2cppinterop-switch.patch), so the patch
+            //    is seen by callers that go through il2cpp -- the game itself -- which is what mods need.
+            AppContext.SetSwitch("Il2CppInterop.HarmonySupport.NoManagedDetour", true);
+            Log("loader: patching Application.productName with Harmony ...");
             var harmony = new Harmony("WarpforgeNx.StackProbe");
             var getter = appType.GetProperty("productName", BindingFlags.Public | BindingFlags.Static).GetGetMethod();
             harmony.Patch(getter, postfix: new HarmonyMethod(typeof(Entry).GetMethod(nameof(ProductNamePostfix), BindingFlags.NonPublic | BindingFlags.Static)));
-            var productName = appType.GetProperty("productName", BindingFlags.Public | BindingFlags.Static).GetValue(null);
-            Log($"loader: Harmony-patched Application.productName = \"{productName}\" (expected \"Warpforge [patched]\")");
+            Log("loader: patch applied");
+            Log($"loader: productName as the game sees it = \"{ProductNameViaIl2Cpp()}\" (expected \"Warpforge [patched]\")");
 
             // 5. DelegateSupport.ConvertDelegate: a managed lambda as an Il2CppSystem.Action, invoked by il2cpp
             int fired = 0;
@@ -122,6 +126,16 @@ namespace WarpforgeNx
         }
 
         static void ProductNamePostfix(ref string __result) { __result += " [patched]"; }
+
+        // Call the getter the way the game does: il2cpp's own MethodInfo, through il2cpp_runtime_invoke.
+        static unsafe string ProductNameViaIl2Cpp()
+        {
+            var klass = IL2CPP.GetIl2CppClass("UnityEngine.CoreModule.dll", "UnityEngine", "Application");
+            var mi = IL2CPP.il2cpp_class_get_method_from_name(klass, "get_productName", 0);
+            IntPtr exc = IntPtr.Zero;
+            var r = IL2CPP.il2cpp_runtime_invoke(mi, IntPtr.Zero, null, ref exc);
+            return exc != IntPtr.Zero ? "(threw)" : IL2CPP.Il2CppStringToManaged(r);
+        }
     }
 
     sealed class NxLogger : ILogger

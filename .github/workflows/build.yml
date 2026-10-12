@@ -34,6 +34,8 @@ jobs:
         run: |
           git clone --depth 1 -b emulator-module-lookup https://github.com/silentanarchist/Il2CppInteropARM64 extern/Il2CppInteropARM64
           cd extern/Il2CppInteropARM64 && git log -1 --oneline
+          # Switch-only change (opt-in by AppContext switch): no MonoMod managed detour under the interpreter
+          git apply ../../managed/nxloader/il2cppinterop-switch.patch && git diff --stat
       - name: Build nxloader
         run: |
           dotnet build managed/nxloader -c Release -o loader
