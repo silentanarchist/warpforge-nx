@@ -216,7 +216,22 @@ void *__wrap_memalign(size_t align, size_t size) {
     static unsigned nr;
     if (nr < 5) { nr++;
       debugPrintf("[gpua] newlib refused %u KB; %s from the GPU arena (live=%u MB peak=%u MB)\n",
-                  (unsigned)(size >> 10), p ? "served" : "and it does not fit", cp_gpua_live_mb(), cp_gpua_peak_mb()); }
+                  (unsigned)(size >> 10), p ? "served" : "and it does not fit", cp_gpua_live_mb(), cp_gpua_peak_mb());
+      /* who wants a block this big? (frame-pointer walk from our caller) */
+      extern int crash_resolve_module(uintptr_t, char *, size_t, uintptr_t *);
+      uintptr_t ra = (uintptr_t)__builtin_return_address(0);
+      uintptr_t fp = (uintptr_t)__builtin_frame_address(0);
+      for (int d = 0; d < 8; d++) {
+        char mod[64]; uintptr_t base = 0;
+        if (crash_resolve_module(ra, mod, sizeof mod, &base))
+          debugPrintf("[gpua]   caller #%d %s+0x%lx\n", d, mod, (unsigned long)(ra - base));
+        else debugPrintf("[gpua]   caller #%d %016lx\n", d, (unsigned long)ra);
+        MemoryInfo mi; u32 pi;
+        if (!fp || R_FAILED(svcQueryMemory(&mi, &pi, fp)) || !(mi.perm & Perm_R) || mi.addr + mi.size < fp + 16) break;
+        uintptr_t next = ((uintptr_t *)fp)[0]; ra = ((uintptr_t *)fp)[1];
+        if (next <= fp || !ra) break;
+        fp = next;
+      } }
   }
   /* A failed page-aligned allocation IS the bug this file exists to prevent, so
    * say so loudly (bounded) rather than letting it surface as a GL error. */

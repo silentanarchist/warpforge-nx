@@ -84,7 +84,12 @@
  * 128 MB temp-job block failed at the first battle. 512 keeps 2.5x the
  * measured use and gives the heap 384 MB back; "[oc] commit-pool EXHAUSTED"
  * in debug.log is the sign it needs raising again. */
-#define OC_POOL_BYTES       ((size_t) 512 * 1024 * 1024)  /* was 896 (was 384) */
+/* The pool now GROWS in 64 MB chunks as it is used (libc_shim.c), so this is only
+ * the first chunk. 256 is above the 145-237 MB seen used through loading and the
+ * menu; starting smaller leaves the heap the contiguous room the engine's
+ * 128 MB block needs at the main menu (three bad runs on 2026-10-12 all had
+ * that block refused by newlib during loading). */
+#define OC_POOL_BYTES       ((size_t) 256 * 1024 * 1024)  /* first chunk; was 512 (896, 384) */
 #define OC_STACK_RESERVE    ((size_t) 256 * 1024 * 1024)  /* stack region kept free for thread stacks */
 #define MMAP_VIRT_RESERVE   ((size_t)6144 * 1024 * 1024)
 #define OVERCOMMIT_HEAP_MB  608u

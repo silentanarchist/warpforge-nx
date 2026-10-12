@@ -129,8 +129,41 @@ static const char *sym(uintptr_t v, char *buf, size_t cap) {
 }
 
 /* ---- the handler ---------------------------------------------------------- */
-void __libnx_exception_handler(ThreadExceptionDump *ctx) {
+/* One dump at a time, on a private stack. libnx gives every faulting thread the
+ * SAME exception stack and the same ThreadExceptionDump; a second thread faulting
+ * while the first was still writing (memory corruption rarely hits one thread)
+ * trampled the first thread's frames and the dump stopped after four lines. The
+ * entry below runs with nothing on the shared stack: the first thread moves to
+ * its own stack and dumps; any later one parks forever. */
+void wf_crash_dump(ThreadExceptionDump *ctx);
+alignas(16) u8 wf_crash_dump_stack[0x4000];
+int wf_crash_dump_taken;
+void wf_crash_park(void) { for (;;) svcSleepThread(1000000000ULL); }
+__asm__(
+    ".section .text\n"
+    ".global __libnx_exception_handler\n"
+    ".type __libnx_exception_handler, %function\n"
+    "__libnx_exception_handler:\n"
+    "  adrp x1, wf_crash_dump_taken\n"
+    "  add  x1, x1, :lo12:wf_crash_dump_taken\n"
+    "1:ldaxr w2, [x1]\n"
+    "  mov   w3, #1\n"
+    "  stlxr w4, w3, [x1]\n"
+    "  cbnz  w4, 1b\n"
+    "  cbnz  w2, 2f\n"
+    "  adrp x3, wf_crash_dump_stack\n"
+    "  add  x3, x3, :lo12:wf_crash_dump_stack\n"
+    "  add  x3, x3, #0x4000\n"
+    "  mov  sp, x3\n"
+    "  b    wf_crash_dump\n"
+    "2:b    wf_crash_park\n"
+);
+
+void wf_crash_dump(ThreadExceptionDump *ctx_shared) {
     char b1[96], b2[96];
+    /* our own copy: the shared one is rewritten if another thread faults */
+    ThreadExceptionDump dump = *ctx_shared;
+    ThreadExceptionDump *ctx = &dump;
 
     /* Push the buffered debug.log first: the first Mono run on hardware left a
      * 12-line debug.log next to a full stall.log, because the lines that said
