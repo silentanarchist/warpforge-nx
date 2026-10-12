@@ -733,9 +733,50 @@ static void log_app_upcall(const FakeID *id) {
   debugPrintf("[jni] call: %s.%s%s\n", id->cls, id->name, id->sig);
 }
 
+/* WARPFORGE: the Java trust store. libunity's TLS asks
+ *   TrustManagerFactory.getDefaultAlgorithm() / getInstance(alg) / init(null) /
+ *   getTrustManagers() -> X509TrustManager.getAcceptedIssuers() -> X509Certificate.getEncoded()
+ * and verifies server chains against the DER it gets. With no Android store the
+ * answer was an empty list and every https request failed with "Cert verify
+ * failed" (first networked run). Answer with the Let's Encrypt roots. */
+#include "warpforge_cacerts.h"
+static void *wf_tls_object(void *recv, const FakeID *id) {
+  if (!strcmp(id->name, "getDefaultAlgorithm") && sig_returns(id->sig, "Ljava/lang/String;"))
+    return jni_make_string("PKIX");
+  if (!strcmp(id->name, "getInstance") && sig_returns(id->sig, "Ljavax/net/ssl/TrustManagerFactory;"))
+    return jni_make_object("javax/net/ssl/TrustManagerFactory");
+  if (!strcmp(id->name, "getTrustManagers")) {
+    FakeObjArray *a = calloc(1, sizeof *a);
+    a->tag = TAG_OBJARR; a->len = 1; a->items = calloc(1, sizeof(void *));
+    a->items[0] = jni_make_object("javax/net/ssl/X509TrustManager");
+    debugPrintf("[tls] getTrustManagers -> 1 X509TrustManager\n");
+    return reg_local(a);
+  }
+  if (!strcmp(id->name, "getAcceptedIssuers")) {
+    FakeObjArray *a = calloc(1, sizeof *a);
+    a->tag = TAG_OBJARR; a->len = (int)wf_cacerts_n; a->items = calloc(wf_cacerts_n, sizeof(void *));
+    for (unsigned i = 0; i < wf_cacerts_n; i++) {
+      char label[64]; snprintf(label, sizeof label, "wf/cert/%u", i);
+      a->items[i] = jni_make_object(label);
+    }
+    debugPrintf("[tls] getAcceptedIssuers -> %u root certificates\n", wf_cacerts_n);
+    return reg_local(a);
+  }
+  if (!strcmp(id->name, "getEncoded") && recv && *(uint32_t *)recv == TAG_CLASS &&
+      !strncmp(((FakeObject *)recv)->label, "wf/cert/", 8)) {
+    unsigned i = (unsigned)atoi(((FakeObject *)recv)->label + 8);
+    if (i >= wf_cacerts_n) return NULL;
+    unsigned char *d = malloc(wf_cacerts[i].len);
+    memcpy(d, wf_cacerts[i].der, wf_cacerts[i].len);
+    return make_pri_array_adopt(d, (int)wf_cacerts[i].len, 1);
+  }
+  return NULL;
+}
+
 static void *dispatch_object(void *recv, const FakeID *id, va_list va) {
   if (!id) return NULL;
   log_app_upcall(id);
+  { void *t = wf_tls_object(recv, id); if (t) return t; }
   /* String.getBytes([charset]) -> byte[] of the string's UTF-8 bytes. Unity's
    * PlayerPrefs key-encoding is key.getBytes() -> new String([B,charset) ->
    * Uri.encode(...); without real bytes the whole chain collapsed to "" and
