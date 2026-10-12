@@ -133,8 +133,24 @@ float wf_motion_float(const void *recv, const char *name, va_list va) {
 /* Called once per frame with this frame's touches (cloverpit_touch phases).
  * Injects at most one event per frame for the primary finger. */
 typedef uint8_t (*fn_inject)(void *, void *, void *, int32_t);
+static void *g_env, *g_thiz; static fn_inject g_inject;
+
+/* After the keyboard: if a finger was down when it opened, send its UP now, so the
+ * next tap starts a fresh gesture (IMGUI otherwise sees drags). */
+void wf_motion_release(void) {
+  if (!g_down || !g_inject) { g_down = 0; return; }
+  g_down = 0;
+  g_ev.action = 1; g_ev.count = 1; g_ev.ids[0] = 0; g_ev.event_time = now_ms(); g_ev.down_time = g_down_time;
+  void *ev = jni_make_object("wf/motion");
+  snap_store(ev, &g_ev);
+  uint8_t handled = g_inject(g_env, g_thiz, ev, WF_DEVICE_TOUCH);
+  debugPrintf("[motion] released after the keyboard -> handled=%u\n", handled);
+}
+
 void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, int n) {
   if (!inject || n <= 0) return;
+  g_env = env; g_thiz = thiz; g_inject = inject;
+  { extern int wf_softinput_is_open(void); if (wf_softinput_is_open()) return; }   /* the applet has the screen */
   const cp_touch *p = &t[0];
   int action;
   if (p->phase == CP_TOUCH_DOWN)      { action = 0; g_down = 1; g_down_time = now_ms(); }

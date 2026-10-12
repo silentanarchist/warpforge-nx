@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <switch.h>
 #include "util.h"
 #include "jni_fake.h"
@@ -35,18 +36,45 @@ static unsigned g_logged;
 enum { KT_DEFAULT = 0, KT_ASCII = 1, KT_NUMBERS_AND_PUNCT = 2, KT_URL = 3, KT_NUMBER_PAD = 4,
        KT_PHONE_PAD = 5, KT_NAME_PHONE_PAD = 6, KT_EMAIL = 7, KT_SOCIAL = 8, KT_SEARCH = 9, KT_DECIMAL_PAD = 10 };
 
+typedef struct { void *thiz; char text[2048]; char hint[256]; int type, multiline, secure, limit; } kbd_req_t;
+static Thread g_thread;
+static int g_thread_live;
+
+static void run_keyboard(void *arg);
+
+/* The keyboard runs on its own thread: with the engine thread blocked inside the
+ * applet for the whole entry, the touch that opened the box never got its UP
+ * processed and IMGUI took every later tap for a drag. The engine keeps running
+ * (the applet covers the screen anyway) and the callbacks come when it closes. */
 void wf_softinput_show(void *thiz, const char *text, int type, int multiline, int secure,
                        const char *placeholder, int char_limit) {
+  if (g_open) return;
+  if (g_thread_live) { threadWaitForExit(&g_thread); threadClose(&g_thread); g_thread_live = 0; }
+  kbd_req_t *r = calloc(1, sizeof *r);
+  if (!r) return;
+  r->thiz = thiz; r->type = type; r->multiline = multiline; r->secure = secure; r->limit = char_limit;
+  snprintf(r->text, sizeof r->text, "%s", text ? text : "");
+  snprintf(r->hint, sizeof r->hint, "%s", placeholder ? placeholder : "");
+  g_open = 1;
+  Result rc = threadCreate(&g_thread, run_keyboard, r, NULL, 256 * 1024, 0x3B, -2);
+  if (R_SUCCEEDED(rc)) rc = threadStart(&g_thread);
+  if (R_FAILED(rc)) { debugPrintf("[keyboard] could not start the keyboard thread (0x%x)\n", rc); free(r); g_open = 0; return; }
+  g_thread_live = 1;
+}
+
+static void run_keyboard(void *arg) {
+  kbd_req_t *r = arg;
+  void *thiz = r->thiz; const char *text = r->text; const char *placeholder = r->hint;
+  int type = r->type, multiline = r->multiline, secure = r->secure, char_limit = r->limit;
   fn_bool set_visible = jni_lookup_unity_native("nativeSetKeyboardIsVisible");
   fn_str  set_string  = jni_lookup_unity_native("nativeSetInputString");
   fn_void closed      = jni_lookup_unity_native("nativeSoftInputClosed");
   fn_void canceled    = jni_lookup_unity_native("nativeSoftInputCanceled");
   if (!set_string || !closed) {
     debugPrintf("[keyboard] the engine's keyboard natives are not registered; no keyboard\n");
+    free(r); g_open = 0;
     return;
   }
-  if (g_open) return;
-  g_open = 1;
   if (g_logged < 5) { g_logged++;
     debugPrintf("[keyboard] showSoftInput type=%d multiline=%d secure=%d limit=%d text=\"%s\" hint=\"%s\"\n",
                 type, multiline, secure, char_limit, text ? text : "", placeholder ? placeholder : ""); }
@@ -81,6 +109,9 @@ void wf_softinput_show(void *thiz, const char *text, int type, int multiline, in
     if (g_logged <= 5) debugPrintf("[keyboard] closed without text (0x%x)\n", rc);
   }
   if (set_visible) set_visible(fake_env, thiz, 0);
+  /* the finger that opened the box: make sure the engine sees it lifted */
+  { extern void wf_motion_release(void); wf_motion_release(); }
+  free(r);
   g_open = 0;
 }
 
