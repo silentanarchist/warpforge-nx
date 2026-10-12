@@ -740,7 +740,34 @@ static void log_app_upcall(const FakeID *id) {
  * answer was an empty list and every https request failed with "Cert verify
  * failed" (first networked run). Answer with the Let's Encrypt roots. */
 #include "warpforge_cacerts.h"
+/* Settings.Secure.ANDROID_ID: the game signs in with it (LoginWithAndroidDeviceID),
+ * and an empty one is refused by the server ("AndroidDeviceId is missing"). Use a
+ * 16-hex-digit id, like Android's, derived from the console serial so it is the
+ * same on every start and different on another console; the serial itself is
+ * hashed (FNV-1a 64) and never leaves the device. */
+static const char *wf_android_id(void) {
+  static char id[17];
+  if (id[0]) return id;
+  char serial[64] = {0};
+  if (R_SUCCEEDED(setsysInitialize())) {
+    SetSysSerialNumber sn;
+    if (R_SUCCEEDED(setsysGetSerialNumber(&sn))) snprintf(serial, sizeof serial, "%s", sn.number);
+    setsysExit();
+  }
+  if (!serial[0]) snprintf(serial, sizeof serial, "warpforge_nx-unknown");
+  uint64_t h = 0xcbf29ce484222325ull;
+  const char *salt = "warpforge_nx.android_id.v1:";
+  for (const char *p = salt; *p; p++) { h ^= (unsigned char)*p; h *= 0x100000001b3ull; }
+  for (const char *p = serial; *p; p++) { h ^= (unsigned char)*p; h *= 0x100000001b3ull; }
+  snprintf(id, sizeof id, "%016llx", (unsigned long long)h);
+  debugPrintf("[jni] ANDROID_ID -> %s (from the console serial, hashed)\n", id);
+  return id;
+}
+
 static void *wf_tls_object(void *recv, const FakeID *id) {
+  /* Settings.Secure.getString(resolver, ANDROID_ID) */
+  if (!strcmp(id->name, "getString") && strstr(id->sig, "Landroid/content/ContentResolver;"))
+    return jni_make_string(wf_android_id());
   if (!strcmp(id->name, "getDefaultAlgorithm") && sig_returns(id->sig, "Ljava/lang/String;"))
     return jni_make_string("PKIX");
   if (!strcmp(id->name, "getInstance") && sig_returns(id->sig, "Ljavax/net/ssl/TrustManagerFactory;"))
@@ -1209,6 +1236,7 @@ static void *field_object(const FakeID *id) {
   // Environment.MEDIA_MOUNTED MUST equal getExternalStorageState()'s return
   // ("mounted", set in act_object) or the storage check fails and save data is
   // disabled. Keep both in lockstep.
+  if (!strcmp(n, "ANDROID_ID")) return jni_make_string("android_id");
   if (name_has(c, "os/Environment")) {
     if (!strcmp(n, "MEDIA_MOUNTED"))           return jni_make_string("mounted");
     if (!strcmp(n, "MEDIA_MOUNTED_READ_ONLY")) return jni_make_string("mounted_ro");
