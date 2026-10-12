@@ -62,7 +62,28 @@ int wf_motion_is_event(const void *recv, const char *cls) {
   return cls && (strstr(cls, "view/MotionEvent") || strstr(cls, "view/InputEvent"));
 }
 
-static int idx_arg(va_list va) { int i = va_arg(va, int); return (i >= 0 && i < g_ev.count) ? i : 0; }
+/* Each event object carries its own snapshot: the engine keeps a copy
+ * (MotionEvent.obtain) and reads it later, after the next frame's event has
+ * replaced g_ev. Keyed by the object pointer; the ring is far larger than the
+ * engine holds at once. */
+#define SNAP_N 64
+static struct { const void *obj; wf_motion_t ev; } g_snaps[SNAP_N];
+static unsigned g_snap_next;
+static void snap_store(const void *obj, const wf_motion_t *ev) {
+  g_snaps[g_snap_next % SNAP_N].obj = obj; g_snaps[g_snap_next % SNAP_N].ev = *ev; g_snap_next++;
+}
+static const wf_motion_t *snap_find(const void *obj) {
+  for (unsigned i = 0; i < SNAP_N; i++) if (g_snaps[i].obj == obj) return &g_snaps[i].ev;
+  return &g_ev;
+}
+/* MotionEvent.obtain(event): a copy with the same state. recycle(): nothing. */
+void *wf_motion_obtain(const void *src) {
+  void *o = jni_make_object("wf/motion");
+  snap_store(o, snap_find(src));
+  return o;
+}
+
+static int idx_arg(va_list va, const wf_motion_t *e) { int i = va_arg(va, int); return (i >= 0 && i < e->count) ? i : 0; }
 
 /* The first questions the engine asks an injected event, so a rejected touch can
  * be traced to the one it failed. */
@@ -71,36 +92,38 @@ static void trace_call(const char *kind, const char *name) {
   if (g_traced < 40) { g_traced++; debugPrintf("[motion]   engine asks %s %s\n", kind, name); }
 }
 
-uint64_t wf_motion_int(const char *name, va_list va) {
+uint64_t wf_motion_int(const void *recv, const char *name, va_list va) {
   trace_call("int", name);
-  if (!strcmp(name, "getActionMasked"))  return (uint64_t)g_ev.action;
-  if (!strcmp(name, "getAction"))        return (uint64_t)g_ev.action;        /* index 0 -> no high bits */
+  const wf_motion_t *e = snap_find(recv);
+  if (!strcmp(name, "getActionMasked"))  return (uint64_t)e->action;
+  if (!strcmp(name, "getAction"))        return (uint64_t)e->action;        /* index 0 -> no high bits */
   if (!strcmp(name, "getActionIndex"))   return 0;
-  if (!strcmp(name, "getPointerCount"))  return (uint64_t)g_ev.count;
-  if (!strcmp(name, "getPointerId"))     return (uint64_t)g_ev.ids[idx_arg(va)];
+  if (!strcmp(name, "getPointerCount"))  return (uint64_t)e->count;
+  if (!strcmp(name, "getPointerId"))     return (uint64_t)e->ids[idx_arg(va, e)];
   if (!strcmp(name, "getSource"))        return ASOURCE_TOUCHSCREEN;
   if (!strcmp(name, "getDeviceId"))      return WF_DEVICE_TOUCH;
   if (!strcmp(name, "getToolType"))      return TOOL_TYPE_FINGER;
-  if (!strcmp(name, "getEventTime"))     return (uint64_t)g_ev.event_time;
-  if (!strcmp(name, "getDownTime"))      return (uint64_t)g_ev.down_time;
+  if (!strcmp(name, "getEventTime"))     return (uint64_t)e->event_time;
+  if (!strcmp(name, "getDownTime"))      return (uint64_t)e->down_time;
   if (!strcmp(name, "getHistorySize"))   return 0;
   /* getButtonState, getMetaState, getFlags, getEdgeFlags, getActionButton, isXPressed: 0 */
   return 0;
 }
 
-float wf_motion_float(const char *name, va_list va) {
+float wf_motion_float(const void *recv, const char *name, va_list va) {
   trace_call("float", name);
-  if (!strcmp(name, "getX") || !strcmp(name, "getRawX")) return g_ev.x[idx_arg(va)];
-  if (!strcmp(name, "getY") || !strcmp(name, "getRawY")) return g_ev.y[idx_arg(va)];
-  if (!strcmp(name, "getPressure")) return g_ev.action == 1 ? 0.0f : 1.0f;
-  if (!strcmp(name, "getSize"))     return g_ev.action == 1 ? 0.0f : 0.1f;
+  const wf_motion_t *e = snap_find(recv);
+  if (!strcmp(name, "getX") || !strcmp(name, "getRawX")) return e->x[idx_arg(va, e)];
+  if (!strcmp(name, "getY") || !strcmp(name, "getRawY")) return e->y[idx_arg(va, e)];
+  if (!strcmp(name, "getPressure")) return e->action == 1 ? 0.0f : 1.0f;
+  if (!strcmp(name, "getSize"))     return e->action == 1 ? 0.0f : 0.1f;
   if (!strcmp(name, "getAxisValue")) {
-    int axis = va_arg(va, int); int i = idx_arg(va);
+    int axis = va_arg(va, int); int i = idx_arg(va, e);
     switch (axis) {
-      case 0: return g_ev.x[i];                               /* AXIS_X */
-      case 1: return g_ev.y[i];                               /* AXIS_Y */
-      case 2: return g_ev.action == 1 ? 0.0f : 1.0f;          /* AXIS_PRESSURE */
-      case 3: return g_ev.action == 1 ? 0.0f : 0.1f;          /* AXIS_SIZE */
+      case 0: return e->x[i];                               /* AXIS_X */
+      case 1: return e->y[i];                               /* AXIS_Y */
+      case 2: return e->action == 1 ? 0.0f : 1.0f;          /* AXIS_PRESSURE */
+      case 3: return e->action == 1 ? 0.0f : 0.1f;          /* AXIS_SIZE */
       default: return 0.0f;
     }
   }
@@ -128,6 +151,7 @@ void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, 
   g_ev.down_time = g_down_time;
 
   void *ev = jni_make_object("wf/motion");
+  snap_store(ev, &g_ev);
   uint8_t handled = inject(env, thiz, ev, WF_DEVICE_TOUCH);
   if (g_logged < 6) {
     g_logged++;
