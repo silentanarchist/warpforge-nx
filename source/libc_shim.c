@@ -2124,9 +2124,19 @@ size_t    g_il2cpp_size = 0;   /* mapped size of libil2cpp; 0 = unknown (guard i
 #define GC_RESTART_SIG_OFF 0x6b54260   /* GC_sig_thr_restart  (int)   -> 24 */
 #define GC_START_ACK_OFF   0x6b54258   /* GC_retry_signals, restart-ack gate */
 #define GC_ACK_SEM_OFF     0x6d85718   /* GC_suspend_ack_sem  (void*)        */
+#define GC_THREADS_OFF     0x6d85738   /* GC_threads[256]     (GC_thread*)   */
+#define GC_STOP_COUNT_OFF  0x6d85708   /* GC_stop_count       (word)         */
+#define GC_THREAD_TABLE_SZ 256
+/* struct GC_Thread_Rep, as GC_suspend_all/GC_restart_all read it:
+ *   +0x00 next   +0x08 id (pthread_t)   +0x10 stop_info.last_stop_count
+ *   +0x18 stop_info.stack_ptr           +0x20 flags (bit0 FINISHED)   +0x21 thread_blocked */
+#define GCT_NEXT 0x00
+#define GCT_ID   0x08
+#define GCT_LAST_STOP 0x10
+#define GCT_STACK_PTR 0x18
 
 /* Largest offset this bridge dereferences; used for the bounds guard below. */
-#define GC_MAX_OFF         (GC_ACK_SEM_OFF + sizeof(void *))
+#define GC_MAX_OFF         (GC_THREADS_OFF + GC_THREAD_TABLE_SZ * sizeof(void *))
 
 /* GUARD WORDS. Same fail-safe pattern as every code patch in this port: assert a
  * known instruction word at each site the four offsets were read from, so that a
@@ -2148,10 +2158,95 @@ static const GcGuard gc_guards[] = {
   { 0x2da6e18, 0xb9426301, "GC_restart_all ldr w1,[x24,#0x260]" },
   { 0x2da6eec, 0xf001fee0, "GC_stop_init   adrp x0,#0x6d85000"  },
   { 0x2da6ef0, 0x911c6000, "GC_stop_init   add x0,x0,#0x718"    },
+  /* the thread table and the struct fields the real suspension below writes */
+  { 0x2da6b70, 0xf001fef6, "GC_suspend_all adrp x22,#0x6d85000" },
+  { 0x2da6b74, 0x911ce2d6, "GC_suspend_all add x22,x22,#0x738 (GC_threads)" },
+  { 0x2da6b8c, 0xf9400740, "GC_suspend_all ldr x0,[x26,#0x8] (p->id)" },
+  { 0x2da6ba8, 0xf9400b48, "GC_suspend_all ldr x8,[x26,#0x10] (last_stop_count)" },
+  { 0x2da6bac, 0xf94386e9, "GC_suspend_all ldr x9,[x23,#0x708] (GC_stop_count)" },
 };
 
+/* --- really stopping the world -------------------------------------------
+ * Until now the bridge only acked: the other threads kept running through the
+ * mark phase, and their stacks were never scanned at all (for a thread that was
+ * never signalled, bdwgc's stop_info.stack_ptr still holds the stack *end* it was
+ * registered with, so GC_push_all_stacks scans an empty range). The game got away
+ * with it because its worker threads are parked nearly all the time; with the mod
+ * the heap is busier and Photon's ack thread read an object header mid-collection
+ * (the post-login crash in PhotonHandler.FallbackSendAckThread).
+ *
+ * Horizon can do what the signal did: svcSetThreadActivity pauses a thread and
+ * svcGetThreadContext3 hands back its registers. The pthread_t the GC passes is
+ * libnx's struct __pthread_t, whose first member is the Thread (handle inside);
+ * the main thread is the ~0 sentinel. We pause the thread, copy its registers to
+ * just under its stack pointer (what the kernel's signal frame did on Android) and
+ * point stack_ptr there, so the scan covers registers and stack both. On restart
+ * the thread is resumed.
+ *
+ * One hazard the signal did not have: a paused thread that holds one of OUR locks
+ * which the collector then needs. The collector allocates nothing during the mark
+ * except, rarely, a bigger mark stack through mmap -- so a thread caught inside
+ * the mmap arena lock is let run on and re-paused a moment later. */
+#define THRD_MAIN_SENTINEL ((pthread_t)~(uintptr_t)0)
+static Handle gc_thread_handle(pthread_t t) {
+  if (t == THRD_MAIN_SENTINEL) return envGetMainThreadHandle();
+  if (!t) return INVALID_HANDLE;
+  return ((Thread *)t)->handle;      /* struct __pthread_t { Thread thr; void *rc; } */
+}
+static uintptr_t gc_thread_rec(uintptr_t b, pthread_t t) {
+  uintptr_t *table = (uintptr_t *)(b + GC_THREADS_OFF);
+  for (int i = 0; i < GC_THREAD_TABLE_SZ; i++)
+    for (uintptr_t p = table[i]; p; p = *(uintptr_t *)(p + GCT_NEXT))
+      if (*(pthread_t *)(p + GCT_ID) == t) return p;
+  return 0;
+}
+static int g_gc_pause_disabled;    /* set once if pausing ever fails outright */
+static unsigned g_gc_pauses, g_gc_pause_misses, g_gc_misses_logged;
+static int gc_pause_thread(uintptr_t b, pthread_t t) {
+  Handle h = gc_thread_handle(t);
+  if (h == INVALID_HANDLE) return -1;
+  uintptr_t rec = gc_thread_rec(b, t);
+  ThreadContext ctx;
+  for (int attempt = 0; attempt < 200; attempt++) {
+    Result rc = svcSetThreadActivity(h, ThreadActivity_Paused);
+    if (R_FAILED(rc)) return -1;
+    /* the pause lands when the thread next passes through the scheduler */
+    int got = 0;
+    for (int i = 0; i < 100; i++) {
+      if (R_SUCCEEDED(svcGetThreadContext3(&ctx, h))) { got = 1; break; }
+      svcSleepThread(20000);         /* 20 us */
+    }
+    if (!got) { svcSetThreadActivity(h, ThreadActivity_Runnable); return -1; }
+    /* holding our mmap lock? let it finish and catch it again */
+    if ((g_mmap_lock & ~0x40000000u) == h) {
+      svcSetThreadActivity(h, ThreadActivity_Runnable);
+      svcSleepThread(50000);
+      continue;
+    }
+    if (rec) {
+      /* registers, pushed below the thread's own stack pointer */
+      uintptr_t sp = (uintptr_t)ctx.sp;
+      uintptr_t lo = (sp - sizeof(ctx.cpu_gprs) - 32) & ~(uintptr_t)15;
+      uint64_t *regs = (uint64_t *)lo;
+      for (int i = 0; i < 29; i++) regs[i] = ctx.cpu_gprs[i].x;
+      regs[29] = ctx.fp; regs[30] = ctx.lr;
+      *(uintptr_t *)(rec + GCT_STACK_PTR) = lo;
+      *(uintptr_t *)(rec + GCT_LAST_STOP) = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF);
+    }
+    return 0;
+  }
+  return -1;
+}
+static void gc_resume_thread(uintptr_t b, pthread_t t) {
+  Handle h = gc_thread_handle(t);
+  if (h == INVALID_HANDLE) return;
+  uintptr_t rec = gc_thread_rec(b, t);
+  if (rec) *(uintptr_t *)(rec + GCT_LAST_STOP) = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF) | 1;
+  svcSetThreadActivity(h, ThreadActivity_Runnable);
+}
+
+
 int pthread_kill_gc(pthread_t t, int sig) {
-  (void)t;
   uintptr_t b = g_il2cpp_base;
   /* FAIL-SAFE: never dereference outside the loaded module. If the offsets above
    * are ever stale for the binary in hand (the Layton bug), we degrade to a no-op
@@ -2228,19 +2323,33 @@ int pthread_kill_gc(pthread_t t, int sig) {
                        "offsets are for a different libil2cpp");
     }
     void **ack_sem  = (void **)(b + GC_ACK_SEM_OFF);
-    if (sig == suspend_sig) {            /* stop-the-world: ack the suspend */
-      static int logged_s = 0;
-      if (!logged_s) { logged_s = 1;
-        debugPrintf("[gc] stop-world suspend sig=%d -> acking via sem@il2cpp+0x%x (first time)\n",
-                    sig, (unsigned)GC_ACK_SEM_OFF); }
+    if (sig == suspend_sig) {            /* stop-the-world: pause the thread, then ack */
+      /* Logging only happens here, at the start of a collection cycle, when no
+       * thread is paused yet: a paused thread may hold the log's lock. */
+      static uintptr_t seen_cycle = ~(uintptr_t)0;
+      uintptr_t cycle = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF);
+      if (cycle != seen_cycle) {
+        if (seen_cycle == ~(uintptr_t)0)
+          debugPrintf("[gc] stop-world suspend sig=%d restart sig=%d gate=%d -> threads are paused "
+                      "(svcSetThreadActivity) and their registers+stack scanned; ack via sem@il2cpp+0x%x\n",
+                      sig, restart_sig, *(volatile int *)(b + GC_START_ACK_OFF), (unsigned)GC_ACK_SEM_OFF);
+        if (g_gc_pause_misses && g_gc_pause_misses != g_gc_misses_logged &&
+            (g_gc_pause_misses < 4 || g_gc_pause_misses >= 100 * (g_gc_misses_logged / 100 + 1))) {
+          debugPrintf("[gc] %u thread pauses, %u misses (a missed thread runs on through that collection)\n",
+                      g_gc_pauses, g_gc_pause_misses);
+          g_gc_misses_logged = g_gc_pause_misses;
+        }
+        seen_cycle = cycle;
+      }
+      if (!g_gc_pause_disabled) {
+        if (gc_pause_thread(b, t) == 0) g_gc_pauses++;
+        else g_gc_pause_misses++;
+      }
       sem_post_fake(ack_sem);
       return 0;
     }
-    if (sig == restart_sig) {            /* start-the-world: ack iff handler would */
-      static int logged_r = 0;
-      if (!logged_r) { logged_r = 1;
-        debugPrintf("[gc] start-world restart sig=%d gate=%d (first time)\n",
-                    sig, *(volatile int *)(b + GC_START_ACK_OFF)); }
+    if (sig == restart_sig) {            /* start-the-world: resume, ack iff handler would */
+      if (!g_gc_pause_disabled) gc_resume_thread(b, t);
       if (*(volatile int *)(b + GC_START_ACK_OFF)) sem_post_fake(ack_sem);
       return 0;
     }
