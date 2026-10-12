@@ -1,0 +1,41 @@
+# Builds the Switch wrapper (.nro) in devkitPro's own container on every push, and attaches
+# it to a GitHub release when a tag v* is pushed. Nothing from the game is involved: the
+# wrapper contains no game code or assets.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  nro:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Switch portlibs
+        run: |
+          dkp-pacman -Sy --noconfirm --needed \
+            switch-mesa switch-libdrm_nouveau switch-sdl2 switch-zlib switch-libpng switch-ffmpeg
+
+      - name: Build
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          make -j"$(nproc)"
+          ls -la *.nro
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warpforge_nx
+          path: "*.nro"
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.nro"
+          generate_release_notes: true
