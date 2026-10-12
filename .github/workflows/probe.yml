@@ -1,0 +1,18 @@
+name: probe
+on:
+  push:
+    branches: [probe-headers]
+jobs:
+  headers:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - run: |
+          I=/opt/devkitpro/devkitA64/aarch64-none-elf/include
+          for f in sys/socket.h netinet/in.h netinet/tcp.h netdb.h sys/poll.h poll.h fcntl.h sys/_default_fcntl.h sys/errno.h errno.h; do
+            p=$(find $I /opt/devkitpro/libnx/include -name "$(basename $f)" -path "*$f" 2>/dev/null | head -1)
+            echo "===== $f -> $p"
+            [ -n "$p" ] && grep -nE "define (SOL_SOCKET|SO_[A-Z]+|AF_INET6?|PF_INET|SOCK_(STREAM|DGRAM|NONBLOCK|CLOEXEC)|MSG_[A-Z]+|IPPROTO_(TCP|UDP|IPV6)|TCP_[A-Z]+|POLL[A-Z]+|O_NONBLOCK|F_[GS]ETFL|E[A-Z]+ +[0-9]+|AI_[A-Z]+|EAI_[A-Z]+|NI_[A-Z]+|SHUT_[A-Z]+|IP_[A-Z]+|IPV6_[A-Z]+)" "$p" | head -120
+          done
+          echo "===== struct layouts"
+          grep -n -A8 "struct sockaddr_in {" $I/netinet/in.h; grep -n -A6 "struct sockaddr_in6 {" $I/netinet/in.h; grep -n -A4 "struct sockaddr {" $I/sys/socket.h; grep -n -A10 "struct addrinfo {" $I/netdb.h; grep -n -A6 "struct hostent {" $I/netdb.h; grep -n -A3 "struct pollfd" $I/sys/poll.h $I/poll.h 2>/dev/null; grep -n -A4 "struct linger" $I/sys/socket.h; grep -n "typedef.*socklen_t\|typedef.*sa_family_t\|typedef.*nfds_t" -r $I/sys $I/netinet 2>/dev/null | head
