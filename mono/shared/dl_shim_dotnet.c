@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stdint.h>
+#include <string.h>
 #include "dl_shim_base.h"
 #include "io_util.h"
 
@@ -20,6 +21,24 @@ int32_t SystemNative_Socket_Hook(int32_t addressFamily, int32_t socketType, int3
  * libnx's poll reports a socket closed under it (an HttpClient request cancelled on
  * timeout) as ENOTSOCK, which ended the whole game ~2 s after the mod started.
  * Report that case as EBADF, which is what it means here. */
+/* WARPFORGE: POSIX rename() replaces an existing destination; libnx's does not
+ * (the SD filesystem refuses), so File.Move(src, dst, overwrite: true) failed with
+ * "already exists" -- the mod's self-update could never put the new DLL in place.
+ * Remove the destination first when the plain rename is refused. */
+int32_t SystemNative_Rename_Hook(const char *oldPath, const char *newPath)
+{
+    extern void *SystemNative_Rename();
+    extern void *SystemNative_Unlink();
+    int32_t (*rename_fn)(const char *, const char *) = (int32_t (*)(const char *, const char *))(void *)SystemNative_Rename;
+    int32_t (*unlink_fn)(const char *) = (int32_t (*)(const char *))(void *)SystemNative_Unlink;
+    int32_t r = rename_fn(oldPath, newPath);
+    if (r != 0 && newPath && oldPath && strcmp(oldPath, newPath) != 0 && unlink_fn(newPath) == 0) {
+        r = rename_fn(oldPath, newPath);
+        io_debugf("SystemNative_Rename: replaced %s (%s)", newPath, r == 0 ? "ok" : "rename still failed");
+    }
+    return r;
+}
+
 int32_t SystemNative_Poll_Hook(void *pollEvents, uint32_t eventCount, int32_t milliseconds, uint32_t *triggered)
 {
     /* declared the way SYM_RESOLVE below declares them, called through typed pointers */
@@ -46,6 +65,7 @@ void *getsym_SystemNative(const char *name)
 {
     SYM_RESOLVE_EXISTING_NAMED("SystemNative_Socket", SystemNative_Socket_Hook);
     SYM_RESOLVE_EXISTING_NAMED("SystemNative_Poll", SystemNative_Poll_Hook);
+    SYM_RESOLVE_EXISTING_NAMED("SystemNative_Rename", SystemNative_Rename_Hook);
 
     SYM_RESOLVE(SystemNative_CreateAutoreleasePool);
     SYM_RESOLVE(SystemNative_DrainAutoreleasePool);
