@@ -1771,7 +1771,11 @@ int vfprintf_fake(FILE *f, const char *fmt, va_list va) {
 // (android_native.c). Real files (small fds from open()) pass through to newlib.
 // ---------------------------------------------------------------------------
 
+extern int wf_net_is_socket(int fd);   /* warpforge_net.c */
+extern void wf_net_forget(int fd);
+extern int wf_poll(void *fds, unsigned long nfds, int timeout);
 long read_fake(int fd, void *buf, size_t count) {
+  if (wf_net_is_socket(fd)) return read(fd, buf, count);   /* a socket returns what it has */
   if (fakefd_is_fake(fd)) return fakefd_read(fd, buf, count);
   { struct RaCache *c = ra_find(fd); if (c) return ra_read(c, fd, buf, count); }
   /* fsdev can return fewer bytes than requested for a large read; il2cpp's
@@ -1797,6 +1801,7 @@ long write_fake(int fd, const void *buf, size_t count) {
   return write(fd, buf, count);
 }
 int close_fake(int fd) {
+  if (wf_net_is_socket(fd)) { wf_net_forget(fd); return close(fd); }
   ra_detach(fd);
   fd_ino_clear(fd);
   if (fakefd_is_fake(fd)) return fakefd_close(fd);
@@ -1805,7 +1810,14 @@ int close_fake(int fd) {
   return r;
 }
 int pipe_fake(int fds[2]) { return fakefd_pipe(fds); }
-int poll_fake(void *fds, unsigned long nfds, int timeout) { (void)fds; (void)nfds; (void)timeout; return 0; }
+int poll_fake(void *fds, unsigned long nfds, int timeout) {
+  /* WARPFORGE: a poll set that holds any socket goes to the real poll; sets of
+   * only pipe/file descriptors keep the old answer (nothing ready). */
+  const struct { int fd; short ev, rev; } *p = fds;
+  for (unsigned long i = 0; fds && i < nfds; i++)
+    if (wf_net_is_socket(p[i].fd)) return wf_poll(fds, nfds, timeout);
+  (void)timeout; return 0;
+}
 int select_fake(int n, void *r, void *w, void *e, void *t) { (void)n; (void)r; (void)w; (void)e; (void)t; return 0; }
 
 // ---------------------------------------------------------------------------

@@ -23,8 +23,10 @@
 #if DEBUG_LOG
 static Mutex g_log_lock;
 static int log_is_noisy(const char *t) {
+  /* WARPFORGE: [jni] call lines are kept -- they are the inventory of Java
+   * stubs the game needs (deduplicated at the source, so bounded). */
   return !strncmp(t, "dlsym", 5) || !strncmp(t, "dlopen", 6) ||
-         !strncmp(t, "JNI ", 4)  || !strncmp(t, "JNI:", 4) || !strncmp(t, "[jni]", 5);
+         !strncmp(t, "JNI ", 4)  || !strncmp(t, "JNI:", 4);
 }
 #endif
 

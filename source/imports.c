@@ -394,8 +394,18 @@ static int retm1_i(void) { return -1; }
 static unsigned ret0_u(void) { return 0; }
 static int signal_stub(int s, void *h) { (void)s; (void)h; return 0; }
 static int sigaction_stub(int s, const void *a, void *o) { (void)s; (void)a; (void)o; return 0; }
-static int ioctl_stub(int fd, unsigned long req, ...) { (void)fd; (void)req; return -1; }
-static int fcntl_stub(int fd, int cmd, ...) { (void)fd; (void)cmd; return 0; }
+/* WARPFORGE: socket descriptors get real fcntl/ioctl (warpforge_net.c). */
+extern int wf_net_is_socket(int fd);
+extern int wf_fcntl(int fd, int cmd, long arg);
+extern int wf_ioctl(int fd, unsigned long req, void *arg);
+static int ioctl_stub(int fd, unsigned long req, ...) {
+  if (wf_net_is_socket(fd)) { va_list ap; va_start(ap, req); void *a = va_arg(ap, void *); va_end(ap); return wf_ioctl(fd, req, a); }
+  (void)fd; (void)req; return -1;
+}
+static int fcntl_stub(int fd, int cmd, ...) {
+  if (wf_net_is_socket(fd)) { va_list ap; va_start(ap, cmd); long a = va_arg(ap, long); va_end(ap); return wf_fcntl(fd, cmd, a); }
+  (void)fd; (void)cmd; return 0;
+}
 static int tcgetattr_stub(int fd, void *t) { (void)fd; if (t) memset(t, 0, 60); return 0; }
 static int tcsetattr_stub(int fd, int opt, const void *t) { (void)fd; (void)opt; (void)t; return 0; }
 
@@ -1108,12 +1118,19 @@ static int g_combined_n = 0;
 extern DynLibFunction cloverpit_imports[];
 extern const int      cloverpit_imports_num;
 
+/* WARPFORGE: real sockets (warpforge_net.c). Placed FIRST so they win over the
+ * offline stubs below and in unity_imports.c. */
+extern DynLibFunction wf_net_functions[];
+extern size_t         wf_net_numfunctions;
+
 static void build_combined(void) {
   if (g_combined) return;
-  g_combined_n = (int)dynlib_numfunctions + unity_dynlib_numfunctions
+  g_combined_n = (int)wf_net_numfunctions + (int)dynlib_numfunctions + unity_dynlib_numfunctions
                + (int)firebase_extra_numfunctions + cloverpit_imports_num;
   g_combined = malloc((size_t)g_combined_n * sizeof(DynLibFunction));
   size_t off = 0;
+  memcpy(g_combined + off, wf_net_functions, wf_net_numfunctions * sizeof(DynLibFunction));
+  off += wf_net_numfunctions;
   memcpy(g_combined + off, dynlib_functions, dynlib_numfunctions * sizeof(DynLibFunction));
   off += dynlib_numfunctions;
   memcpy(g_combined + off, unity_dynlib_functions,
