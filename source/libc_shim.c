@@ -2102,10 +2102,16 @@ size_t    g_il2cpp_size = 0;   /* mapped size of libil2cpp; 0 = unknown (guard i
  * for .text and + 0xC000 for .data -- so a scan that walks file offsets while
  * comparing virtual addresses is off by exactly one segment delta and matches
  * nothing. gc_globals.py translates explicitly via the program headers. */
-#define GC_SUSPEND_SIG_OFF 0x6028fbc   /* GC_sig_suspend      (int)   -> 30 */
-#define GC_RESTART_SIG_OFF 0x6028fc0   /* GC_sig_thr_restart  (int)   -> 24 */
-#define GC_START_ACK_OFF   0x6028fb8   /* GC_retry_signals, restart-ack gate */
-#define GC_ACK_SEM_OFF     0x6251e18   /* GC_suspend_ack_sem  (void*)        */
+/* WARPFORGE 1.35.0 libil2cpp (112,496,216 bytes). Re-derived the same way:
+ *   pthread_kill call sites 0x2da6bbc (GC_suspend_all) / 0x2da6e1c (GC_restart_all),
+ *   sem_post 0x2da6aac+0x2da6af8 (handler), sem_wait 0x2da6d44, sem_timedwait
+ *   0x2da6ca4, sem_init 0x2da6efc (GC_stop_init, which stores 30/24 after `cmn #1`).
+ *   gate/suspend/restart are contiguous at 0x6b54258/25c/260 (.data, second RW
+ *   PT_LOAD 0x62ec230..); the ack semaphore 0x6d85718 is in .bss. */
+#define GC_SUSPEND_SIG_OFF 0x6b5425c   /* GC_sig_suspend      (int)   -> 30 */
+#define GC_RESTART_SIG_OFF 0x6b54260   /* GC_sig_thr_restart  (int)   -> 24 */
+#define GC_START_ACK_OFF   0x6b54258   /* GC_retry_signals, restart-ack gate */
+#define GC_ACK_SEM_OFF     0x6d85718   /* GC_suspend_ack_sem  (void*)        */
 
 /* Largest offset this bridge dereferences; used for the bounds guard below. */
 #define GC_MAX_OFF         (GC_ACK_SEM_OFF + sizeof(void *))
@@ -2122,14 +2128,14 @@ size_t    g_il2cpp_size = 0;   /* mapped size of libil2cpp; 0 = unknown (guard i
  * .text, so these words are identical in the file and in memory. */
 typedef struct { uint32_t off; uint32_t word; const char *what; } GcGuard;
 static const GcGuard gc_guards[] = {
-  { 0x27c142c, 0xf001c338, "GC_suspend_all adrp x24,#0x6028000" },
-  { 0x27c1468, 0xb94fbf01, "GC_suspend_all ldr w1,[x24,#0xfbc]" },
-  { 0x27c166c, 0xf001c337, "GC_restart_all adrp x23,#0x6028000" },
-  { 0x27c1670, 0xf001c338, "GC_restart_all adrp x24,#0x6028000" },
-  { 0x27c16ac, 0xb94fbae8, "GC_restart_all ldr w8,[x23,#0xfb8]" },
-  { 0x27c16c8, 0xb94fc301, "GC_restart_all ldr w1,[x24,#0xfc0]" },
-  { 0x27c179c, 0x9001d480, "GC_stop_init   adrp x0,#0x6251000"  },
-  { 0x27c17a0, 0x91386000, "GC_stop_init   add x0,x0,#0xe18"    },
+  { 0x2da6b7c, 0xd001ed78, "GC_suspend_all adrp x24,#0x6b54000" },
+  { 0x2da6bb8, 0xb9425f01, "GC_suspend_all ldr w1,[x24,#0x25c]" },
+  { 0x2da6dbc, 0xd001ed77, "GC_restart_all adrp x23,#0x6b54000" },
+  { 0x2da6dc0, 0xd001ed78, "GC_restart_all adrp x24,#0x6b54000" },
+  { 0x2da6dfc, 0xb9425ae8, "GC_restart_all ldr w8,[x23,#0x258]" },
+  { 0x2da6e18, 0xb9426301, "GC_restart_all ldr w1,[x24,#0x260]" },
+  { 0x2da6eec, 0xf001fee0, "GC_stop_init   adrp x0,#0x6d85000"  },
+  { 0x2da6ef0, 0x911c6000, "GC_stop_init   add x0,x0,#0x718"    },
 };
 
 int pthread_kill_gc(pthread_t t, int sig) {
