@@ -145,7 +145,7 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
   svcGetInfo(&sbase, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0);
   svcGetInfo(&ssize, InfoType_StackRegionSize,    CUR_PROCESS_HANDLE, 0);
   if (!sbase || !ssize) return NULL;
-  u64 end = sbase + ssize, a = sbase, best_a = 0, best_l = 0;
+  u64 end = sbase + ssize, a = sbase, best_a = 0, best_l = 0, free_total = 0;
   int holes = 0, mapped = 0;
   while (a < end) {
     MemoryInfo mi; u32 pi;
@@ -155,6 +155,7 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
     if (mi.type == MemType_Unmapped) {
       u64 hs = ms < sbase ? sbase : ms, he = me > end ? end : me;
       if (he > hs) {
+        free_total += he - hs;
         if (he - hs > best_l) { best_l = he - hs; best_a = hs; }
         if (holes < 8)
           debugPrintf("[oc] stack hole %d: %p .. %p (%u MB)\n",
@@ -171,6 +172,21 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
   u64 avail = ((best_a + best_l) - aligned) & ~(MMAP_ARENA_ALIGN - 1);
   if (!avail) return NULL;
   if (avail > want) avail = want;
+  /* WARPFORGE: thread stacks live in this same region (libnx mirrors every
+   * stack into it, including the ones pthread_create_fake allocates from the
+   * heap). The window took whatever the largest hole offered, and with the
+   * per-launch address layout that was once 1984 MB of a 2046 MB hole: ~62 MB
+   * left for ~30 engine threads at 2 MB each plus Mono's. Background
+   * Job.Worker 11 never came up and UnityMain waited for it forever in frame
+   * 0. Always leave OC_STACK_RESERVE of the region free. */
+  u64 cap = free_total > OC_STACK_RESERVE ? free_total - OC_STACK_RESERVE : 0;
+  cap &= ~(MMAP_ARENA_ALIGN - 1);
+  if (avail > cap) {
+    debugPrintf("[oc] window capped %u -> %u MB to keep %u MB of the stack region for thread stacks\n",
+                (unsigned)(avail >> 20), (unsigned)(cap >> 20), (unsigned)(OC_STACK_RESERVE >> 20));
+    avail = cap;
+  }
+  if (!avail) return NULL;
   *out_size = avail;
   return (void *)aligned;
 }

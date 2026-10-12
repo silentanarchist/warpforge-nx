@@ -289,7 +289,13 @@ int pthread_create_fake(pthread_t *thread, const void *bionic_attr, void *entry,
   const int r = pthread_create(thread, &attr, thread_trampoline, ts);
   pthread_attr_destroy(&attr);
   if (r != 0 && stk) __real_free(stk);
-  if (r != 0) { free(ts); return r; }
+  if (r != 0) {
+    /* Loud on purpose: the engine waits forever for a thread that never came
+     * up (PlatformThread::Create's "ready" condvar), so this is the only trace. */
+    debugPrintf("[thread] pthread_create FAILED (%d) stack=%zu KB heap-stack=%p -- "
+                "out of stack-region space?\n", r, stack >> 10, stk);
+    free(ts); return r;
+  }
   return 0;
 }
 int pthread_join_fake(pthread_t thread, void **retval) {

@@ -80,6 +80,7 @@
 /* Stack-region overcommit arena (libc_shim.c). */
 #define OC_WINDOW_BYTES     ((size_t)2048 * 1024 * 1024)  /* was 1536; virtual only */
 #define OC_POOL_BYTES       ((size_t) 896 * 1024 * 1024)  /* was 384; real, was the starved one */
+#define OC_STACK_RESERVE    ((size_t) 256 * 1024 * 1024)  /* stack region kept free for thread stacks */
 #define MMAP_VIRT_RESERVE   ((size_t)6144 * 1024 * 1024)
 #define OVERCOMMIT_HEAP_MB  608u
 
