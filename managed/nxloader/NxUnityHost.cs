@@ -24,7 +24,7 @@ namespace WarpforgeNx
         static int s_traced, s_evFailed;
         static void TraceEvent()
         {
-            if (s_traced >= 24 || s_evFailed > 0) return;
+            if (s_traced >= 40 || s_evFailed > 0) return;
             try
             {
                 if (s_evCurrent == null)
@@ -38,8 +38,8 @@ namespace WarpforgeNx
                 }
                 var cur = s_evCurrent.GetValue(null);
                 if (cur == null) return;
-                var type = s_evType.GetValue(cur)?.ToString() ?? "?";
-                if (type == "Repaint" || type == "Layout" || type == "Ignore" || type == "Used") return;
+                var type = (s_evType.GetValue(cur)?.ToString() ?? "?").ToLowerInvariant();
+                if (type == "repaint" || type == "layout" || type == "ignore" || type == "used") return;
                 s_traced++;
                 Entry.Log($"loader: IMGUI event {type} at {s_evPos.GetValue(cur)}");
             }
