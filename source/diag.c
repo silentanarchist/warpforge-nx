@@ -225,6 +225,13 @@ static void resolve_addr(char *buf, size_t n, uint64_t addr) {
   }
 }
 
+static int wd_readable(uint64_t addr, size_t len) {
+  MemoryInfo mi; u32 pi;
+  if (R_FAILED(svcQueryMemory(&mi, &pi, addr))) return 0;
+  if (mi.type == MemType_Unmapped || !(mi.perm & Perm_R)) return 0;
+  return addr + len <= mi.addr + mi.size;
+}
+
 static void dump_thread_context(const char *name, const ThreadContext *ctx) {
   char a[40], b[40];
   resolve_addr(a, sizeof a, ctx->pc.x);
@@ -240,13 +247,21 @@ static void dump_thread_context(const char *name, const ThreadContext *ctx) {
   /* Clean backtrace via the frame-pointer (x29) chain: [fp]=caller fp, [fp+8]=lr.
    * Bound every dereference to the thread's mapped stack so a wild fp can't fault
    * the watchdog itself. */
+  /* Every read below is checked against the memory map first (readable, mapped)
+   * -- the old "inside the block svcQueryMemory returned for sp" bound was not
+   * enough: a block can be reserved-but-unreadable, or the thread can exit and
+   * its stack vanish between the query and the read. The watchdog then faulted
+   * at boot (frame-3 stall dump) about one run in five: the "random startup
+   * crash". */
   uint64_t slo = 0, shi = 0;
   { MemoryInfo mi; u32 pi;
-    if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, ctx->sp)) && mi.size) { slo = mi.addr; shi = mi.addr + mi.size; } }
+    if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, ctx->sp)) && mi.size && (mi.perm & Perm_R) && mi.type != MemType_Unmapped) {
+      slo = mi.addr; shi = mi.addr + mi.size; } }
+  if (!slo) { stallPrintf("[wd]     (stack not readable)\n"); return; }
   uint64_t fp = ctx->fp;
   for (int depth = 0; depth < 32 && (fp & 7) == 0; depth++) {
-    if (slo) { if (fp < slo || fp + 16 > shi) break; }     /* stay in mapped stack */
-    else if (fp < 0x1000) break;                            /* query failed: loose guard */
+    if (fp < slo || fp + 16 > shi) break;                  /* stay in mapped stack */
+    if (!wd_readable(fp, 16)) break;                       /* re-check: it may be gone */
     const uint64_t nextfp = ((const uint64_t *)(uintptr_t)fp)[0];
     const uint64_t lr     = ((const uint64_t *)(uintptr_t)fp)[1];
     if (!lr) break;
@@ -267,6 +282,7 @@ static void dump_thread_context(const char *name, const ThreadContext *ctx) {
     if (top > shi) top = shi;
     int printed = 0;
     for (uint64_t addr = sp; addr + 8 <= top && printed < 24; addr += 8) {
+      if ((addr & 0xfff) == 0 || addr == sp) { if (!wd_readable(addr, 8)) break; }
       uint64_t v = ((const uint64_t *)(uintptr_t)addr)[0];
       so_module *m = so_find_module_by_addr((const void *)(uintptr_t)v);
       if (!m) continue;
@@ -396,7 +412,12 @@ static void watchdog_main(void *unused) {
       debug_log_flush();            /* so debug.log shows how far the game got */
       dump_threads(++episode, now, 1);
     }
-    if (tick_to_ns(idle) >= DIAG_STALL_NS) {
+    /* The first frames take 4-60 s by design (engine init, the hooks); those
+     * stalls are known and dumping them only added risk and 2000 lines a run.
+     * Frames 1-2 of the old frame-0 hunt are kept: stay silent only from frame 3
+     * to 20 when the stall is under 20 s. */
+    int boot_stall = g_frame >= 3 && g_frame < 20 && tick_to_ns(idle) < 20000ull * 1000000ull;
+    if (tick_to_ns(idle) >= DIAG_STALL_NS && !boot_stall) {
       if (last_dump == 0 || tick_to_ns(now - last_dump) >= DIAG_REDUMP_NS) {
         dump_threads(++episode, now, 0);
         last_dump = now;
