@@ -40,7 +40,7 @@ namespace WarpforgeNx
             if (root.StartsWith("sdmc:", StringComparison.OrdinalIgnoreCase)) root = root.Substring(5);
             Root = root;
             // Debug.Assert in that Debug class library ends the process; log it and go on instead.
-            System.Diagnostics.Debug.SetProvider(new NxDebugProvider());
+            InstallAssertHook();
             Log($"loader: boot, root={root}");
             Log($"loader: {RuntimeInformation.FrameworkDescription}, Il2CppInterop.Runtime {typeof(Il2CppInteropRuntime).Assembly.GetName().Version}, HarmonyX {typeof(Harmony).Assembly.GetName().Version}");
             AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
@@ -80,6 +80,23 @@ namespace WarpforgeNx
                 Log($"loader: {files.Length} framework assemblies listed for Cecil ({string.Join(", ", dirs)})");
             }
             catch (Exception e) { Log("loader: could not list framework assemblies: " + e.Message); }
+        }
+
+        // DebugProvider.s_FailCore is the hook .NET's own tests use to intercept Debug.Fail;
+        // DebugProvider is not in the reference assemblies, so it is set by reflection.
+        static void InstallAssertHook()
+        {
+            try
+            {
+                var t = typeof(System.Diagnostics.Debug).Assembly.GetType("System.Diagnostics.DebugProvider");
+                var f = t?.GetField("s_FailCore", BindingFlags.NonPublic | BindingFlags.Static);
+                if (f == null) { Log("loader: Debug.Assert hook not available"); return; }
+                Action<string, string, string, string> hook = (stack, message, detail, source) =>
+                    Log($"loader: Debug.Assert failed (ignored): {message} {detail}\n{stack}");
+                f.SetValue(null, hook);
+                Log("loader: Debug.Assert failures are logged instead of ending the process");
+            }
+            catch (Exception e) { Log("loader: could not hook Debug.Assert: " + e.Message); }
         }
 
         public static int OnIl2CppReady()
@@ -201,15 +218,6 @@ namespace WarpforgeNx
             var r = IL2CPP.il2cpp_runtime_invoke(mi, IntPtr.Zero, null, ref exc);
             return exc != IntPtr.Zero ? "(threw)" : IL2CPP.Il2CppStringToManaged(r);
         }
-    }
-
-    sealed class NxDebugProvider : System.Diagnostics.DebugProvider
-    {
-        public override void Fail(string message, string detailMessage)
-        {
-            Entry.Log($"loader: Debug.Assert failed (ignored): {message} {detailMessage}\n{Environment.StackTrace}");
-        }
-        public override void Write(string message) { }
     }
 
     sealed class NxLogger : ILogger
