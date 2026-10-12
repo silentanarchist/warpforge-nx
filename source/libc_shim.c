@@ -1123,6 +1123,11 @@ int oc_arena_init(void *window, size_t window_bytes, void *pool, size_t pool_byt
   return 1;
 }
 
+void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb) {
+  *used_mb = (unsigned)((oc_pool_bump * MMAP_PAGE) >> 20);
+  *cap_mb  = (unsigned)((oc_pool_pages * MMAP_PAGE) >> 20);
+}
+
 static int oc_contains(void *addr) {
   return oc_pages && (uint8_t *)addr >= oc_base &&
          (uint8_t *)addr < oc_base + oc_pages * MMAP_PAGE;

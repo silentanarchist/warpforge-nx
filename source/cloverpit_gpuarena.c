@@ -207,6 +207,17 @@ void *__wrap_memalign(size_t align, size_t size) {
     p = gpua_alloc(size);
   if (!p)
     p = __real_memalign(align ? align : 8, size);
+  /* Last resort: newlib is out of room for a big page-aligned block (seen with
+   * the mod loaded: a 128 MB engine allocation at the main menu, with the arena
+   * holding 207 of its 512 MB). Spending arena space beats a null dereference in
+   * the engine a moment later; it is logged so the budget can be retuned. */
+  if (!p && gpua_enabled && align >= GPUA_PAGE && size > GPUA_MAX) {
+    p = gpua_alloc(size);
+    static unsigned nr;
+    if (nr < 5) { nr++;
+      debugPrintf("[gpua] newlib refused %u KB; %s from the GPU arena (live=%u MB peak=%u MB)\n",
+                  (unsigned)(size >> 10), p ? "served" : "and it does not fit", cp_gpua_live_mb(), cp_gpua_peak_mb()); }
+  }
   /* A failed page-aligned allocation IS the bug this file exists to prevent, so
    * say so loudly (bounded) rather than letting it surface as a GL error. */
   if (!p && align >= GPUA_PAGE) {
