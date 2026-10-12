@@ -63,19 +63,30 @@ namespace WarpforgeNx
             if (s_frames == 1 || s_frames == 600 || s_frames == 3600) Log($"loader: OnUpdate frame {s_frames}");
         }
 
+        // Kept free of any Il2Cpp* type: the interpreter resolves every type a method
+        // mentions before running its first line, so a missing Il2Cppmscorlib would
+        // otherwise fail here before the folder check could say so.
         static void StackProbe()
         {
             // 1. the generated proxies (from the owner's refs\il2cpp, copied to the card)
             if (!Directory.Exists(Il2CppAssembliesDir)) { Log($"loader: {Il2CppAssembliesDir} missing -- copy refs\\il2cpp\\*.dll there"); return; }
             var files = Directory.GetFiles(Il2CppAssembliesDir, "*.dll");
+            if (files.Length == 0) { Log($"loader: {Il2CppAssembliesDir} is empty -- copy refs\\il2cpp\\*.dll there"); return; }
             int loaded = 0;
             foreach (var f in files)
             {
                 try { Assembly.LoadFrom(f); loaded++; }
                 catch (Exception e) { Log($"loader: could not load {Path.GetFileName(f)}: {e.GetType().Name}: {e.Message}"); }
             }
-            Log($"loader: {loaded}/{files.Length} Il2Cpp assemblies loaded");
+            Log($"loader: {loaded}/{files.Length} Il2Cpp assemblies loaded ({string.Join(" ", files.Take(6).Select(Path.GetFileNameWithoutExtension))}...)");
+            if (!files.Any(f => Path.GetFileName(f).Equals("Il2Cppmscorlib.dll", StringComparison.OrdinalIgnoreCase)))
+            { Log("loader: Il2Cppmscorlib.dll is not among them -- these are not the generated Il2Cpp assemblies"); return; }
             Environment.SetEnvironmentVariable("IL2CPP_INTEROP_DATABASES_LOCATION", Il2CppAssembliesDir);
+            InteropProbe();
+        }
+
+        static void InteropProbe()
+        {
 
             // 2. the interop runtime, the way MelonLoader's Il2Cpp support module does it
             s_runtime = Il2CppInteropRuntime.Create(new RuntimeConfiguration
