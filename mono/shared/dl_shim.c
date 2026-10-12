@@ -78,13 +78,33 @@ void *dlshim_loadLibrary(const char *name, int flags, char **err, void *user_dat
 	CHECK_LIB_NAME(name, OpenAl);
 	#endif	
 
-	/* WARPFORGE: any other library name (libil2cpp, libunity, GameAssembly,
-	 * RF_CNative_andr, the loader's own native lib...) resolves against the
-	 * game modules the wrapper loaded. One shared handle; the symbol lookup
-	 * walks every loaded module. */
+	/* WARPFORGE: the game's own modules and the wrapper's exports, by name
+	 * ONLY. This used to be a catch-all, and that crashed the first run on
+	 * hardware: Mono tries several spellings of "libSystem.Native"
+	 * ("libSystem.Native.so", "System.Native"...), the misses fell through
+	 * here, and libil2cpp.so EXPORTS Unity's own SystemNative_* -- so the BCL
+	 * ended up inside il2cpp's copy of SystemNative_Stat2 on a thread il2cpp
+	 * knows nothing about (null thread state + 0x135). Anything not listed
+	 * must fail, so Mono goes on to its next spelling. */
+	{
+		static const char *const game_libs[] = {
+			"warpforge", "libwarpforge", "libwarpforge.so",
+			"il2cpp", "libil2cpp", "libil2cpp.so", "GameAssembly", "GameAssembly.dll",
+			"unity", "libunity", "libunity.so",
+			"main", "libmain", "libmain.so",
+			"RF_CNative_andr", "libRF_CNative_andr", "libRF_CNative_andr.so",
+			"burst_generated", "lib_burst_generated", "lib_burst_generated.so",
+		};
+		for (unsigned i = 0; i < sizeof game_libs / sizeof *game_libs; i++)
+			if (!strcmp(name, game_libs[i])) {
+				if (g_config.mononx_logging)
+					io_debugf("dlshim_loadLibrary %s -> game modules", name);
+				return (void *)LibHandle_GameModules;
+			}
+	}
 	if (g_config.mononx_logging)
-    	io_debugf("dlshim_loadLibrary %s -> game modules", name);
-    return (void *)LibHandle_GameModules;
+		io_debugf("dlshim_loadLibrary %s -> not found", name);
+	return NULL;
 }
 
 void *dlshim_closeLibrary(void *handle, void *user_data)
@@ -136,12 +156,13 @@ void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_da
 	#endif
 	case 0xABC00200:   /* LibHandle_GameModules */
 		resolvedLibrary = "game modules";
-		symbol = so_resolve_external(name);
-		if (!symbol) {
-			/* the wrapper's own exports for managed code */
+		{
+			/* the wrapper's own exports for managed code come first */
 			extern void wf_mono_log(const char *line);
 			if (!strcmp(name, "wf_mono_log")) symbol = (void *)wf_mono_log;
 		}
+		if (!symbol && strncmp(name, "SystemNative_", 13) && strncmp(name, "GlobalizationNative_", 20))
+			symbol = so_resolve_external(name);
 		break;
 	}
 

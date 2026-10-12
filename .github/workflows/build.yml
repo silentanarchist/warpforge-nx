@@ -56,7 +56,7 @@ jobs:
         run: |
           export DEVKITPRO=/opt/devkitpro
           make -j"$(nproc)" WF_MONO=1
-          ls -la *.nro
+          ls -la *.nro *.elf
 
       - uses: actions/download-artifact@v4
         with:
@@ -80,6 +80,7 @@ jobs:
           name: warpforge_nx
           path: |
             *.nro
+            *.elf
             mono_hello.dll
             mono_sd.zip
 
@@ -97,6 +98,7 @@ jobs:
           body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime is linked in and starts only when mono_sd.zip is unpacked to the SD root; mono_hello.dll goes in the game folder."
           files: |
             *.nro
+            *.elf
             mono_hello.dll
             mono_sd.zip
 
@@ -106,6 +108,7 @@ jobs:
         with:
           files: |
             *.nro
+            *.elf
             mono_hello.dll
             mono_sd.zip
           generate_release_notes: true

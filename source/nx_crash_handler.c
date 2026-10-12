@@ -132,6 +132,12 @@ static const char *sym(uintptr_t v, char *buf, size_t cap) {
 void __libnx_exception_handler(ThreadExceptionDump *ctx) {
     char b1[96], b2[96];
 
+    /* Push the buffered debug.log first: the first Mono run on hardware left a
+     * 12-line debug.log next to a full stall.log, because the lines that said
+     * where boot got to were still sitting in the 64 KB buffer. */
+    extern void debug_log_flush(void);
+    debug_log_flush();
+
     CLOG("\n[crash] ================ USER EXCEPTION ================\n");
     CLOG("[crash] type=0x%x  esr=%08x  far=%016lx\n",
          ctx->error_desc, ctx->esr, (unsigned long)ctx->far.x);

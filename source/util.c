@@ -71,6 +71,8 @@ static int log_is_important(const char *t) {
    * afterwards to flush them, so a buffered marker is a marker that never
    * arrives -- and its absence would be misread as "that code never ran". */
   return !strncmp(t, "[crash]", 7) || !strncmp(t, "[wd]", 4) ||
+         /* Mono bring-up: every line is a milestone and the runs are short */
+         !strncmp(t, "[mono]", 6) || !strncmp(t, "[managed]", 9) ||
          !strncmp(t, "[loop]", 6) || !strncmp(t, "[vsync]", 7) ||
          !strncmp(t, "[gfx]", 5) || !strncmp(t, "[gc]", 4) ||
          /* [fmod] is the whole point of the OpenSL init trace: it fires a handful
