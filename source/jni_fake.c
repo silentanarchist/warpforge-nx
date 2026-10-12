@@ -872,6 +872,26 @@ static void dispatch_void(void *recv, const FakeID *id, va_list va) {
      * (Path B), which FMOD drives natively via opensles.c. */
     if (0 && !strcmp(id->name, "start")) fmod_audio_start();
   }
+  /* UnityPlayer.showSoftInput(String text, int type, boolean correction, boolean multiline,
+   * boolean secure, boolean alert, String placeholder, int characterLimit, boolean, boolean):
+   * the Switch keyboard (warpforge_softinput.c). hideSoftInput: the keyboard is modal, nothing to do. */
+  if (!strcmp(id->name, "showSoftInput")) {
+    extern void wf_softinput_show(void *thiz, const char *text, int type, int multiline, int secure,
+                                  const char *placeholder, int char_limit);
+    void *jtext = va_arg(va, void *);
+    int type = va_arg(va, int);
+    int correction = va_arg(va, int); (void)correction;
+    int multiline = va_arg(va, int);
+    int secure = va_arg(va, int);
+    int alert = va_arg(va, int); (void)alert;
+    void *jhint = va_arg(va, void *);
+    int limit = va_arg(va, int);
+    const char *text = jtext ? jni_string_utf(jtext) : "";
+    const char *hint = jhint ? jni_string_utf(jhint) : "";
+    wf_softinput_show(recv, text, type, multiline, secure, hint, limit);
+    return;
+  }
+  if (!strcmp(id->name, "hideSoftInput")) return;
   if (cloverpit_owns_class(id->cls)) { cloverpit_dispatch_void(recv, id, va); return; }
   if (unity_owns_class(id->cls)) { unity_dispatch_void(recv, id, va); return; }
   if (is_mov(id->cls)) { mov_void(id, va); return; }

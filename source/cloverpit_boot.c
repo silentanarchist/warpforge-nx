@@ -355,14 +355,19 @@ int cp_boot_and_run(void) {
                     (unsigned long long)frame_no,
                     frames * 1e9 / (double)(t - last_log),
                     cp_time_now(), cp_time_delta(), cp_time_frames());
-      {
-        extern void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb);
-        unsigned ocu = 0, occ = 0; oc_pool_stats(&ocu, &occ);
-        struct mallinfo mi = mallinfo();
-        debugPrintf("[gpua] live=%u MB peak=%u MB | oc pool %u/%u MB | newlib: in use %u MB, free %u MB\n",
-                    cp_gpua_live_mb(), cp_gpua_peak_mb(), ocu, occ,
-                    (unsigned)(mi.uordblks >> 20), (unsigned)(mi.fordblks >> 20));
       }
+      /* memory budget, every 30 s (or when the GPU arena's peak moved) */
+      {
+        static unsigned n, last_peak;
+        extern void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb);
+        if (++n % 15 == 1 || cp_gpua_peak_mb() != last_peak) {
+          last_peak = cp_gpua_peak_mb();
+          unsigned ocu = 0, occ = 0; oc_pool_stats(&ocu, &occ);
+          struct mallinfo mi = mallinfo();
+          debugPrintf("[mem] gpu arena live=%u MB peak=%u MB | oc pool %u/%u MB | newlib: in use %u MB, free %u MB\n",
+                      cp_gpua_live_mb(), cp_gpua_peak_mb(), ocu, occ,
+                      (unsigned)(mi.uordblks >> 20), (unsigned)(mi.fordblks >> 20));
+        }
       }
       frames = 0;
       last_log = t;

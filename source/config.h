@@ -79,7 +79,12 @@
 
 /* Stack-region overcommit arena (libc_shim.c). */
 #define OC_WINDOW_BYTES     ((size_t)2048 * 1024 * 1024)  /* was 1536; virtual only */
-#define OC_POOL_BYTES       ((size_t) 896 * 1024 * 1024)  /* was 384; real, was the starved one */
+/* 896 MB reserved 196 MB used through a whole session with the mod (measured
+ * 2026-10-12), while the general heap ran out at 64 MB free and the engine's
+ * 128 MB temp-job block failed at the first battle. 512 keeps 2.5x the
+ * measured use and gives the heap 384 MB back; "[oc] commit-pool EXHAUSTED"
+ * in debug.log is the sign it needs raising again. */
+#define OC_POOL_BYTES       ((size_t) 512 * 1024 * 1024)  /* was 896 (was 384) */
 #define OC_STACK_RESERVE    ((size_t) 256 * 1024 * 1024)  /* stack region kept free for thread stacks */
 #define MMAP_VIRT_RESERVE   ((size_t)6144 * 1024 * 1024)
 #define OVERCOMMIT_HEAP_MB  608u
