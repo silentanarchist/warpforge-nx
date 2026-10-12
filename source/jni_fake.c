@@ -804,6 +804,11 @@ static void *dispatch_object(void *recv, const FakeID *id, va_list va) {
   if (!id) return NULL;
   log_app_upcall(id);
   { void *t = wf_tls_object(recv, id); if (t) return t; }
+  { extern int wf_motion_is_event(const void *, const char *);
+    if (wf_motion_is_event(recv, id->cls)) {
+      if (!strcmp(id->name, "getDevice")) { extern void *cloverpit_input_device_handle(void); return cloverpit_input_device_handle(); }
+      return NULL;
+    } }
   /* String.getBytes([charset]) -> byte[] of the string's UTF-8 bytes. Unity's
    * PlayerPrefs key-encoding is key.getBytes() -> new String([B,charset) ->
    * Uri.encode(...); without real bytes the whole chain collapsed to "" and
@@ -838,6 +843,8 @@ static juint dispatch_int(void *recv, const FakeID *id, va_list va) {
    * receiver so only our own boxes are affected. intValue/longValue/booleanValue
    * all land here (CallInt/Long/BooleanMethod -> dispatch_int). */
   if (unity_is_boxed(recv)) return unity_boxed_int(recv);
+  { extern int wf_motion_is_event(const void *, const char *); extern uint64_t wf_motion_int(const char *, va_list);
+    if (wf_motion_is_event(recv, id->cls)) return wf_motion_int(id->name, va); }
   if (cloverpit_owns_class(id->cls)) return cloverpit_dispatch_int(recv, id, va);
   if (unity_owns_class(id->cls)) return unity_dispatch_int(recv, id, va);
   if (is_t2b(id->cls)) return t2b_int(id, va);
@@ -848,6 +855,8 @@ static float dispatch_float(void *recv, const FakeID *id, va_list va) {
   if (!id) return 0.0f;
   log_app_upcall(id);
   if (unity_is_boxed(recv)) return unity_boxed_float(recv);   /* Float.floatValue */
+  { extern int wf_motion_is_event(const void *, const char *); extern float wf_motion_float(const char *, va_list);
+    if (wf_motion_is_event(recv, id->cls)) return wf_motion_float(id->name, va); }
   return act_float(id, va);
 }
 static void dispatch_void(void *recv, const FakeID *id, va_list va) {

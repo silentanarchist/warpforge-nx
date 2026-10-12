@@ -132,7 +132,15 @@ void cp_pump_input(void *env, void *thiz, fn_inject inject) {
    * this deliberately injects nothing: handing the engine a malformed jobject
    * faults inside libunity, which is a far worse failure than no input.
    * ------------------------------------------------------------------ */
-  (void)env; (void)thiz; (void)changed; (void)ntouch;
+  (void)changed;
+#if CP_ENABLE_POINTER_INPUT
+  /* WARPFORGE: the primary finger also goes to the engine's native input
+   * (IMGUI, the mod's windows) -- see warpforge_motion.c. */
+  { extern void wf_motion_pump(void *, void *, fn_inject, const cp_touch *, int);
+    wf_motion_pump(env, thiz, inject, touches, ntouch); }
+#else
+  (void)env; (void)thiz; (void)ntouch;
+#endif
 
 #if CP_ENABLE_POINTER_INPUT
   cp_touchhook_tick();   /* pointer -> UnityEngine.Input mouse API */

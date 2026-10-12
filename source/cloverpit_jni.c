@@ -190,6 +190,9 @@ int cloverpit_owns_class(const char *cls) {
          has(cls, "os/VibrationEffect");
 }
 
+/* WARPFORGE: MotionEvent.getDevice() answers with the same InputDevice handle. */
+void *cloverpit_input_device_handle(void) { return cpj_new(CPJ_INPUTDEVICE); }
+
 /* ------------------------------------------------------ object dispatch */
 
 void *cloverpit_dispatch_object(void *recv, const void *id_, va_list va) {
