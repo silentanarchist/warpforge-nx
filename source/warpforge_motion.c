@@ -150,6 +150,21 @@ void wf_motion_pump(void *env, void *thiz, fn_inject inject, const cp_touch *t, 
   g_ev.event_time = now_ms();
   g_ev.down_time = g_down_time;
 
+  /* The engine flips touch y against the input area the Java view reports with
+   * nativeSetInputArea(x, y, w, h); nothing had reported one, so the flip ran
+   * against a height of 0 and IMGUI saw taps at y = 1080 + y. Report the whole
+   * screen once, before the first event. */
+  {
+    static int area_set;
+    if (!area_set) {
+      area_set = 1;
+      extern void *jni_lookup_unity_native(const char *name);
+      void (*set_area)(void *, void *, int, int, int, int) = jni_lookup_unity_native("nativeSetInputArea");
+      if (set_area) { set_area(env, thiz, 0, 0, CP_FORCE_SCREEN_W, CP_FORCE_SCREEN_H);
+                      debugPrintf("[motion] input area set to %dx%d\n", CP_FORCE_SCREEN_W, CP_FORCE_SCREEN_H); }
+      else debugPrintf("[motion] nativeSetInputArea not registered\n");
+    }
+  }
   void *ev = jni_make_object("wf/motion");
   snap_store(ev, &g_ev);
   uint8_t handled = inject(env, thiz, ev, WF_DEVICE_TOUCH);
