@@ -47,6 +47,7 @@
 #include "so_util.h"
 #include "util.h"
 #include "cloverpit_time.h"
+#include "warpforge_resolve.h"
 
 static uint64_t g_base_ns;
 static uint64_t g_prev_ns;
@@ -107,42 +108,40 @@ static float   hk_realtimeSinceStartup(void)   { return elapsed_s(); }
 
 typedef struct {
   const char *name;
-  uint32_t    rva;
-  uint32_t    guard;
   void       *fn;
 } TimeHook;
 
+/* WARPFORGE: targets are resolved by name through libil2cpp's reflection API
+ * (warpforge_resolve.c) instead of dump RVAs + guard words. Called from the
+ * render loop once the runtime is up (wf_hooks_tick), not from main(). */
 int cp_time_install(so_module *il2cpp) {
-  static const uint32_t G = 0xa9bf4ffeu;   /* stp x30, x19, [sp, #-0x10]! */
+  (void)il2cpp;
   const TimeHook H[] = {
-    { "get_time",                   RVA_Time_get_time,                   G, (void *)hk_time },
-    { "get_deltaTime",              RVA_Time_get_deltaTime,              G, (void *)hk_deltaTime },
-    { "get_unscaledTime",           RVA_Time_get_unscaledTime,           G, (void *)hk_unscaledTime },
-    { "get_unscaledDeltaTime",      RVA_Time_get_unscaledDeltaTime,      G, (void *)hk_unscaledDeltaTime },
-    { "get_fixedUnscaledDeltaTime", RVA_Time_get_fixedUnscaledDeltaTime, G, (void *)hk_fixedUnscaledDeltaTime },
-    { "get_fixedDeltaTime",         RVA_Time_get_fixedDeltaTime,         G, (void *)hk_fixedDeltaTime },
-    { "get_smoothDeltaTime",        RVA_Time_get_smoothDeltaTime,        G, (void *)hk_smoothDeltaTime },
-    { "get_timeScale",              RVA_Time_get_timeScale,              G, (void *)hk_timeScale },
-    { "get_frameCount",             RVA_Time_get_frameCount,             G, (void *)hk_frameCount },
-    { "get_renderedFrameCount",     RVA_Time_get_renderedFrameCount,     G, (void *)hk_renderedFrameCount },
-    { "get_realtimeSinceStartup",   RVA_Time_get_realtimeSinceStartup,   G, (void *)hk_realtimeSinceStartup },
+    { "get_time",                   (void *)hk_time },
+    { "get_deltaTime",              (void *)hk_deltaTime },
+    { "get_unscaledTime",           (void *)hk_unscaledTime },
+    { "get_unscaledDeltaTime",      (void *)hk_unscaledDeltaTime },
+    { "get_fixedUnscaledDeltaTime", (void *)hk_fixedUnscaledDeltaTime },
+    { "get_fixedDeltaTime",         (void *)hk_fixedDeltaTime },
+    { "get_smoothDeltaTime",        (void *)hk_smoothDeltaTime },
+    { "get_timeScale",              (void *)hk_timeScale },
+    { "get_frameCount",             (void *)hk_frameCount },
+    { "get_renderedFrameCount",     (void *)hk_renderedFrameCount },
+    { "get_realtimeSinceStartup",   (void *)hk_realtimeSinceStartup },
   };
   const int n = (int)(sizeof(H) / sizeof(H[0]));
-  uintptr_t base = (uintptr_t)il2cpp->load_virtbase;
-
   g_base_ns = now_ns();
   g_prev_ns = g_base_ns;
   g_now_s   = 0.0f;
-
   int applied = 0;
   for (int i = 0; i < n; i++) {
-    uint32_t got = *(volatile uint32_t *)(base + H[i].rva);
-    if (got != H[i].guard) {
-      debugPrintf("[time] %-26s SKIP (guard %08x, found %08x)\n",
-                  H[i].name, H[i].guard, got);
+    void *at = wf_resolve_method("UnityEngine.CoreModule.dll", "UnityEngine", "Time", H[i].name, 0);
+    if (!at) {
+      debugPrintf("[time] %-26s SKIP (not resolved)\n", H[i].name);
       continue;
     }
-    hook_arm64(base + H[i].rva, (uintptr_t)H[i].fn);
+    hook_arm64((uintptr_t)at, (uintptr_t)H[i].fn);
+    debugPrintf("[time] %-26s hooked @ %p\n", H[i].name, at);
     applied++;
   }
   g_installed = applied > 0;
@@ -151,7 +150,6 @@ int cp_time_install(so_module *il2cpp) {
               applied, n);
   return applied;
 }
-
 int   cp_time_installed(void) { return g_installed; }
 float cp_time_now(void)       { return elapsed_s(); }
 float cp_time_delta(void)     { return g_delta; }

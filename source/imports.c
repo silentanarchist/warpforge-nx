@@ -798,6 +798,8 @@ DynLibFunction dynlib_functions[] = {
   { "ftell", (uintptr_t)&ftell_fake }, { "ftello", (uintptr_t)&ftello },
   { "fflush", (uintptr_t)&fflush_fake }, { "fprintf", (uintptr_t)&fprintf_fake },
   { "vfprintf", (uintptr_t)&vfprintf_fake }, { "fputc", (uintptr_t)&fputc_fake },
+  /* warpforge: libRF_CNative_andr.so (RayFire) imports these two as well */
+  { "putc", (uintptr_t)&fputc_fake }, { "rewind", (uintptr_t)&rewind_fake },
   { "fputs", (uintptr_t)&fputs_fake }, { "fgetc", (uintptr_t)&fgetc_fake },
   { "fgets", (uintptr_t)&fgets_fake }, { "getc", (uintptr_t)&getc_fake },
   { "getwc", (uintptr_t)&getc_fake }, { "fputwc", (uintptr_t)&fputc_fake },

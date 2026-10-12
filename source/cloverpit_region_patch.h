@@ -1,5 +1,10 @@
 /* cloverpit_region_patch.h -- 256MB -> 64MB memory-region granularity for
- * CloverPit 1.4.8 (Unity 6000.2.6f2).  GENERATED -- tools/gen_region_patch.py.
+ * Warpforge 1.35.0 (Unity 6000.2.6f2).
+ *
+ * WARPFORGE: the 21 sites below are CloverPit 1.4.8's table shifted by a constant
+ * 0xCC720 -- the memory manager is laid out identically in both builds, and every
+ * `from` word was verified at its new address (tools/gen_offsets.py scheme).
+ * Originally GENERATED -- tools/gen_region_patch.py.
  *
  * WHY IT IS REQUIRED (a memory-layout change alone cannot work)
  * Unity's allocator rounds every virtual reservation up to a 256 MB region. On
@@ -54,27 +59,27 @@
 typedef struct { uint32_t off, from, to; } NxPatchWord;
 
 static const NxPatchWord CP_REGION_WORDS[] = {
-  { 0x0561dc8, 0x12be0009, 0x12bf8009 },  /* mov w9, #0xfffffff                 LocalLowLevelAllocator::ReserveMemoryBlock [fp] */
-  { 0x0561dd8, 0x92648d35, 0x92669535 },  /* and x21, x9, #0xfffffffff0000000   LocalLowLevelAllocator::ReserveMemoryBlock [fp] */
-  { 0x05626bc, 0x52a20008, 0x52a08008 },  /* mov w8, #0x10000000                 */
-  { 0x05640c0, 0x52a20009, 0x52a08009 },  /* mov w9, #0x10000000                 */
-  { 0x0566610, 0x52a20009, 0x52a08009 },  /* mov w9, #0x10000000                DynamicHeapAllocator::DynamicHeapAllocator [fp] */
-  { 0x0566adc, 0x12be000d, 0x12bf800d },  /* mov w13, #0xfffffff                 */
-  { 0x0566b08, 0x92648d36, 0x92669536 },  /* and x22, x9, #0xfffffffff0000000    */
-  { 0x0568ab8, 0xd35cdc33, 0xd35ad433 },  /* ubfx x19, x1, #0x1c, #0x1c          */
-  { 0x0568ac0, 0xd35cfd15, 0xd35afd15 },  /* lsr x21, x8, #0x1c                  */
-  { 0x0568b64, 0x52a20008, 0x52a08008 },  /* mov w8, #0x10000000                VirtualAllocator::ReserveMemoryBlock [fp] */
-  { 0x0568e98, 0xd35cfc28, 0xd35afc28 },  /* lsr x8, x1, #0x1c                  VirtualAllocator::GetMemoryBlockFromPointer [fp] */
-  { 0x0568ea8, 0x92646c28, 0x92667428 },  /* and x8, x1, #0xfffffff0000000       */
-  { 0x0568eb0, 0xd35c9c2a, 0xd35a942a },  /* ubfx x10, x1, #0x1c, #0xc           */
-  { 0x0568ec4, 0xd35cdc29, 0xd35ad429 },  /* ubfx x9, x1, #0x1c, #0x1c           */
-  { 0x0568ec8, 0xb25c6feb, 0xb25e77eb },  /* mov x11, #-0x1000000000             */
-  { 0x0568ecc, 0xf2a2000b, 0xf2a0800b },  /* movk x11, #0x1000, lsl #16          */
-  { 0x0568f10, 0xcb0a7108, 0xcb0a6908 },  /* sub x8, x8, x10, lsl #28            */
-  { 0x0568f24, 0xd368fc28, 0xd366fc28 },  /* lsr x8, x1, #0x28                   */
-  { 0x0568f34, 0xd35c9c29, 0xd35a9429 },  /* ubfx x9, x1, #0x1c, #0xc            */
-  { 0x056a8e0, 0xd368fc28, 0xd366fc28 },  /* lsr x8, x1, #0x28                   */
-  { 0x056a8f8, 0xd35c9e89, 0xd35a9689 },  /* ubfx x9, x20, #0x1c, #0xc           */
+  { 0x062e4e8, 0x12be0009, 0x12bf8009 },  /* mov w9, #0xfffffff                 LocalLowLevelAllocator::ReserveMemoryBlock [fp] */
+  { 0x062e4f8, 0x92648d35, 0x92669535 },  /* and x21, x9, #0xfffffffff0000000   LocalLowLevelAllocator::ReserveMemoryBlock [fp] */
+  { 0x062eddc, 0x52a20008, 0x52a08008 },  /* mov w8, #0x10000000                 */
+  { 0x06307e0, 0x52a20009, 0x52a08009 },  /* mov w9, #0x10000000                 */
+  { 0x0632d30, 0x52a20009, 0x52a08009 },  /* mov w9, #0x10000000                DynamicHeapAllocator::DynamicHeapAllocator [fp] */
+  { 0x06331fc, 0x12be000d, 0x12bf800d },  /* mov w13, #0xfffffff                 */
+  { 0x0633228, 0x92648d36, 0x92669536 },  /* and x22, x9, #0xfffffffff0000000    */
+  { 0x06351d8, 0xd35cdc33, 0xd35ad433 },  /* ubfx x19, x1, #0x1c, #0x1c          */
+  { 0x06351e0, 0xd35cfd15, 0xd35afd15 },  /* lsr x21, x8, #0x1c                  */
+  { 0x0635284, 0x52a20008, 0x52a08008 },  /* mov w8, #0x10000000                VirtualAllocator::ReserveMemoryBlock [fp] */
+  { 0x06355b8, 0xd35cfc28, 0xd35afc28 },  /* lsr x8, x1, #0x1c                  VirtualAllocator::GetMemoryBlockFromPointer [fp] */
+  { 0x06355c8, 0x92646c28, 0x92667428 },  /* and x8, x1, #0xfffffff0000000       */
+  { 0x06355d0, 0xd35c9c2a, 0xd35a942a },  /* ubfx x10, x1, #0x1c, #0xc           */
+  { 0x06355e4, 0xd35cdc29, 0xd35ad429 },  /* ubfx x9, x1, #0x1c, #0x1c           */
+  { 0x06355e8, 0xb25c6feb, 0xb25e77eb },  /* mov x11, #-0x1000000000             */
+  { 0x06355ec, 0xf2a2000b, 0xf2a0800b },  /* movk x11, #0x1000, lsl #16          */
+  { 0x0635630, 0xcb0a7108, 0xcb0a6908 },  /* sub x8, x8, x10, lsl #28            */
+  { 0x0635644, 0xd368fc28, 0xd366fc28 },  /* lsr x8, x1, #0x28                   */
+  { 0x0635654, 0xd35c9c29, 0xd35a9429 },  /* ubfx x9, x1, #0x1c, #0xc            */
+  { 0x0637000, 0xd368fc28, 0xd366fc28 },  /* lsr x8, x1, #0x28                   */
+  { 0x0637018, 0xd35c9e89, 0xd35a9689 },  /* ubfx x9, x20, #0x1c, #0xc           */
 };
 #define CP_REGION_WORDS_N (sizeof(CP_REGION_WORDS)/sizeof(CP_REGION_WORDS[0]))
 

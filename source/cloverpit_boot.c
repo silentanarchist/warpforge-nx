@@ -30,6 +30,7 @@
 #include "cloverpit_entrypoints.h"
 #include "cloverpit_locate.h"
 #include "cloverpit_offsets.h"
+#include "warpforge_resolve.h"
 #include "cloverpit_jni.h"
 #include "cloverpit_time.h"
 #include "android_native_unity.h"
@@ -236,6 +237,9 @@ int cp_boot_and_run(void) {
      * calls this every frame rather than off the applet hook, because the hook
      * does not fire for operation-mode changes. */
     android_native_update_mode();
+
+    /* WARPFORGE: install the managed hooks on the first frame the runtime is up. */
+    wf_hooks_tick();
 
     /* Samples deltaTime for the managed Time hooks. Must be once per frame. */
     cp_time_tick();

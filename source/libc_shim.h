@@ -112,6 +112,7 @@ int ferror_fake(FILE *f);
 int feof_fake(FILE *f);
 int fileno_fake(FILE *f);
 int fseek_fake(FILE *f, long off, int whence);
+void rewind_fake(void *f);
 long ftell_fake(FILE *f);
 int getc_fake(FILE *f);
 int fgetc_fake(FILE *f);

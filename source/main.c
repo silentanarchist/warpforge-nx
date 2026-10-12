@@ -59,6 +59,7 @@ void cp_gpua_enable(void);   /* cloverpit_gpuarena.c */
 #include "cloverpit_touchhook.h"
 #include "cloverpit_screen.h"
 #include "cloverpit_offsets.h"
+#include "warpforge_resolve.h"
 
 /* Resolved at runtime from the .nro's own location -- see cloverpit_root.c.
  * Compiling the folder name in meant the SD directory had to be named exactly
@@ -94,12 +95,14 @@ unsigned long g_oc_win_addr = 0;
 u64      g_oc_sysres = 0;
 
 so_module main_mod, unity_mod, il2cpp_mod;
+extern so_module burst_mod, rayfire_mod;
 
 /* Strong override of nx_crash_handler.c's weak stub: name addresses that fall inside
  * our loaded .so images (creport can't, since they aren't real modules). */
 int crash_resolve_module(uintptr_t addr, char *name_out, size_t name_cap, uintptr_t *base_out) {
   const struct { const char *n; so_module *m; } mods[] = {
     { "libmain.so", &main_mod }, { "libunity.so", &unity_mod }, { "libil2cpp.so", &il2cpp_mod },
+    { "lib_burst_generated.so", &burst_mod }, { "libRF_CNative_andr.so", &rayfire_mod },
   };
   for (unsigned i = 0; i < sizeof(mods)/sizeof(*mods); i++) {
     uintptr_t b = (uintptr_t)mods[i].m->load_virtbase;
@@ -302,13 +305,20 @@ static void check_syscalls(void) {
 /* Bad Piggies 2.4.3297 ships data.unity3d (UnityFS) + sharedassets*.resource +
  * sharedassets0.resource + the il2cpp metadata. NO OBB, NO split levels. All staged
  * flat under assets/bin/Data/ by tools/stage_sd.py. */
+/* Warpforge 1.35.0 ships its data as split files (globalgamemanagers.assets.splitN,
+ * sharedassets0.assets.splitN ...), which libunity joins itself (AndroidSplitFile)
+ * through the asset-manager path, plus the Addressables bundles under assets/aa/
+ * from the data pack. prepare_switch.py (android patch/switch) builds the layout. */
 static void check_data(void) {
   const char *files[] = {
     LIB_MAIN, LIB_UNITY, LIB_IL2CPP,
-    "assets/bin/Data/data.unity3d",
-    "assets/bin/Data/sharedassets0.resource",
+    "assets/bin/Data/globalgamemanagers",
+    "assets/bin/Data/globalgamemanagers.assets.split0",
+    "assets/bin/Data/level0",
     "assets/bin/Data/Managed/Metadata/global-metadata.dat",
     "assets/bin/Data/boot.config",
+    "assets/bin/Data/unity_app_guid",
+    "assets/aa/Android/catalog.json",
   };
   char path[768];
   struct stat st;
@@ -365,8 +375,12 @@ static void nx_applet_hook(AppletHookType hook, void *param) {
  * =========================================================================== */
 
 #define LIB_BURST  "lib_burst_generated.so"
+/* RayFire (mesh shattering, P/Invoked as "RF_CNative_andr"). Self-contained C++:
+ * libc/libm only. Optional: without it those DllImports throw inside the game's
+ * destruction effects rather than at boot. */
+#define LIB_RAYFIRE "libRF_CNative_andr.so"
 
-so_module burst_mod;
+so_module burst_mod, rayfire_mod;
 
 /* Implemented in cloverpit_boot.c */
 int cp_boot_and_run(void);
@@ -380,7 +394,7 @@ int main(int argc, char *argv[]) {
   cp_resolve_game_root(argc, argv);
 
   socketInitializeDefault();
-  debugPrintf("[boot] === cloverpit_nx start (Unity 6000.2.6f2 / IL2CPP) ===\n");
+  debugPrintf("[boot] === warpforge_nx start (Warpforge 1.35.0, Unity 6000.2.6f2 / IL2CPP) ===\n");
   cp_root_report(argc, argv);
 
   /* CWD fix: title-override leaves cwd at the .nro folder or SD root; Unity reads
@@ -391,8 +405,8 @@ int main(int argc, char *argv[]) {
     int rc = chdir(DATA_ROOT);
     struct stat st;
     int reach_meta = stat("assets/bin/Data/Managed/Metadata/global-metadata.dat", &st) == 0;
-    int reach_data = stat("assets/bin/Data/data.unity3d", &st) == 0;
-    debugPrintf("[boot] cwd '%s' -> chdir(%s)=%d; metadata=%d data.unity3d=%d\n",
+    int reach_data = stat("assets/bin/Data/globalgamemanagers", &st) == 0;
+    debugPrintf("[boot] cwd '%s' -> chdir(%s)=%d; metadata=%d globalgamemanagers=%d\n",
                 cwd, DATA_ROOT, rc, reach_meta, reach_data);
     if (rc != 0)
       debugPrintf("[boot] WARNING: chdir failed -- data root may be wrong\n");
@@ -434,9 +448,8 @@ int main(int argc, char *argv[]) {
                   "may fail an allocation mid-frame and wedge the console\n",
                   GFX_RESERVE_MB / 2);
     if ((tot >> 20) < 5000)
-      debugPrintf("[boot] NOTE: 4GB console. CloverPit's payload is ~140 MB of "
-                  "libs + 250 MB of assets; the Unity 6 region-granularity patch "
-                  "IS derived and applied (see [region] below).\n");
+      debugPrintf("[boot] NOTE: 4GB console. Warpforge's payload is ~150 MB of "
+                  "libs + ~770 MB of assets (loaded on demand through Addressables).\n");
   }
 
   /* Stack-region overcommit arena. Any failure -> heap-backed arena. */
@@ -554,6 +567,11 @@ int main(int argc, char *argv[]) {
     memset(&burst_mod, 0, sizeof burst_mod);
   }
 
+  if (load_module(&rayfire_mod, LIB_RAYFIRE) < 0) {
+    debugPrintf("[boot] %s not loaded -- RayFire effects will throw when used\n", LIB_RAYFIRE);
+    memset(&rayfire_mod, 0, sizeof rayfire_mod);
+  }
+
   g_il2cpp_base = (uintptr_t)il2cpp_mod.load_virtbase;
   g_il2cpp_size = il2cpp_mod.load_size;
   debugPrintf("[boot] libmain=%p libunity=%p libil2cpp=%p burst=%p\n",
@@ -564,6 +582,7 @@ int main(int argc, char *argv[]) {
   so_finalize(&unity_mod);  so_flush_caches(&unity_mod);
   so_finalize(&il2cpp_mod); so_flush_caches(&il2cpp_mod);
   if (burst_mod.load_virtbase) { so_finalize(&burst_mod); so_flush_caches(&burst_mod); }
+  if (rayfire_mod.load_virtbase) { so_finalize(&rayfire_mod); so_flush_caches(&rayfire_mod); }
   debugPrintf("[boot] modules finalized + flushed\n");
 
   /* Locate the engine functions we patch, then patch them. Both steps are
@@ -597,6 +616,7 @@ int main(int argc, char *argv[]) {
   so_execute_init_array(&unity_mod);
   so_execute_init_array(&il2cpp_mod);
   if (burst_mod.load_virtbase) so_execute_init_array(&burst_mod);
+  if (rayfire_mod.load_virtbase) so_execute_init_array(&rayfire_mod);
 
   /* Release the raw ELF staging buffers now that everything is relocated and
    * constructed. This is ~123 MB for CloverPit (libil2cpp alone is 100 MB) and
@@ -605,6 +625,7 @@ int main(int argc, char *argv[]) {
   so_free_temp(&unity_mod);
   so_free_temp(&il2cpp_mod);
   if (burst_mod.load_virtbase) so_free_temp(&burst_mod);
+  if (rayfire_mod.load_virtbase) so_free_temp(&rayfire_mod);
   debugPrintf("[boot] init arrays run; staging buffers freed\n");
 
   jni_init();
@@ -651,38 +672,18 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* Managed-side input hooks. Il2CppDumper output for 1.4.8 showed that CloverPit
-   * reaches input through Rewired, and that Rewired's Android path
-   * (UnityInputJoystickSource + ThreadSafeUnityInput) reads UnityEngine.Input --
-   * so hooking UnityEngine.Input is correct here after all. Installed AFTER
-   * il2cpp's JNI_OnLoad so the runtime exists.
-   *   PlayerPrefs: still no hook needed. Unity 6 reaches PlayerPrefs through Java
-   *   PlayerPrefs: not needed. Unity 6 reaches PlayerPrefs through Java
-   *     SharedPreferences, which unity_jni.c already implements over prefs.kv.
-   *     Verified: CloverPit's libunity.so carries getSharedPreferences and the
-   *     ".v2.playerprefs" store name. */
-  if (cp_il2cpp_bind(&il2cpp_mod) == 0)
-    cp_il2cpp_install_hooks(&il2cpp_mod);
-
-  /* Splash video. Read the manifest first so the hook installer's log line and
-   * the clip list appear together, and so a missing videos/ folder is reported
-   * before anything can call Play. Neither call allocates GL, opens a device or
-   * starts a thread -- the decoder only exists between a Play and a Stop.
-   * Independent of cp_il2cpp_bind: these are code patches, not runtime-API
-   * hooks, and the video path must not be able to take the input hooks down. */
+  /* Managed-side hooks (UnityEngine.Time driven from our clock, the touchscreen
+   * presented as a mouse) are WARPFORGE-resolved by name through libil2cpp's
+   * reflection API and installed from the render loop on the first frame after
+   * il2cpp_init -- see warpforge_hooks.c / warpforge_resolve.c. CloverPit's
+   * Rewired joystick hooks, Panik PlatformAPI override, VideoPlayer hooks and
+   * RenderingMaster screen fix were CloverPit-specific and are not installed. */
+  cp_il2cpp_bind(&il2cpp_mod);
+  wf_resolve_bind(&il2cpp_mod);
+#if CP_VIDEO
   cp_video_init(cp_game_root());
   cp_il2cpp_install_video_hooks(&il2cpp_mod);
-
-  /* Force Panik.PlatformAPI to the "no store platform" backend. Without this the
-   * loading screen waits forever on Google Play Games authentication, which
-   * cannot complete here. Independent of cp_il2cpp_bind: it is a code patch, not
-   * a runtime-API hook. */
-  cp_il2cpp_force_platform_none(&il2cpp_mod);
-
-  /* Drive UnityEngine.Time from our own clock. The engine's TimeManager never
-   * ticks here, so without this every managed Time.* value stays frozen and the
-   * game renders but never advances. */
-  cp_time_install(&il2cpp_mod);
+#endif
 
   /* Arm the GPU arena only now. Everything before this point -- the overcommit
    * pool, the mmap arena, module loading -- makes large page-aligned
@@ -691,18 +692,9 @@ int main(int argc, char *argv[]) {
    * freeze. From here on the only page-aligned allocator of this size class is
    * libdrm_nouveau. */
   cp_gpua_enable();
-  /* Installed in both modes. With CP_ENABLE_POINTER_INPUT=0 these hooks are
-   * what actively DENIES touch and mouse to the game; skipping them would let
-   * the engine advertise its native Android values instead. */
-  cp_touchhook_install(&il2cpp_mod);
-
-  /* Screen dimensions MUST be non-zero: the game's RenderingMaster scales a
-   * render texture in 0.005 steps "up to the max resolution available", and a
-   * zero base makes that loop non-terminating (100% CPU, gear frozen). */
-  cp_screen_install(&il2cpp_mod);
 
   diag_thread_register(NULL, 1);       /* mark this as the engine main thread */
-  diag_set_name(NULL, "cloverpit-main");
+  diag_set_name(NULL, "warpforge-main");
   diag_watchdog_start();               /* logs a backtrace if a frame wedges */
 
   int rc = cp_boot_and_run();   /* re-asserts TLS itself, right before initJni */

@@ -87,19 +87,19 @@
  * libcrx.so and its .mvgl archive, were referenced by nothing in this tree, and
  * only invited someone to wire them up.) */
 
-/* --- CloverPit identity (JNI Context shim: getPackageName / versionCode) ---
- * Read from the APK: AndroidManifest.xml (package, versionCode 38, versionName
- * 1.4.8) and assets/bin/Data/unity_app_guid. The CS_* names are what the
+/* --- Warpforge identity (JNI Context shim: getPackageName / versionCode) ---
+ * Read from the APK: AndroidManifest.xml (package, versionCode 176, versionName
+ * 1.35.0) and assets/bin/Data/unity_app_guid. The CS_* names are what the
  * inherited jni_fake.c / unity_jni.c expect. */
-#define CS_PACKAGE       "com.PanikArcade.CloverPit"
-#define CS_VERSION_NAME  "1.4.8"
-#define CS_VERSION_CODE  38
-#define CS_APP_GUID      "97d7ca40-aeab-45d2-85bd-3f456a304eec"
+#define CS_PACKAGE       "com.Everguild.WarhammerWarpforge"
+#define CS_VERSION_NAME  "1.35.0"
+#define CS_VERSION_CODE  176
+#define CS_APP_GUID      "f605cb7c-1fde-4139-aa6f-c348da5141d1"
 
-#define LOG_NAME    "sdmc:/switch/cloverpit_nx/debug.log"
+#define LOG_NAME    "sdmc:/switch/warpforge_nx/debug.log"
 
 /* Game data root == the .nro's own folder (SoLoader SD convention). */
-#define GAME_HOME   "sdmc:/switch/cloverpit_nx"
+#define GAME_HOME   "sdmc:/switch/warpforge_nx"
 
 /* on-hardware file logging (debug.log). Set to 0 for release builds. */
 /* Disable il2cpp's GC at boot?
@@ -304,7 +304,7 @@
  *
  * The button/stick path is independent of this: cp_pump_input samples its own
  * PadState and feeds cp_pad_set() regardless. */
-#define CP_ENABLE_POINTER_INPUT 0
+#define CP_ENABLE_POINTER_INPUT 1   /* warpforge: a touch game -- the pointer IS the input */
 
 /* Unholy Fusion DLC entitlement.
  *
@@ -345,7 +345,7 @@
  * The clips must be staged first -- tools/stage_sd.py writes videos/ and
  * videos/manifest.txt out of your own copy. With no manifest the player logs
  * once and disables itself; it never blocks boot. */
-#define CP_VIDEO 1
+#define CP_VIDEO 0   /* warpforge: off until the VideoPlayer hooks are re-derived */
 
 /* Upper bound on the decoded frame size, in texture terms.
  *

@@ -1727,6 +1727,7 @@ int ferror_fake(FILE *f) { if (is_fake_file(f)) return 0; return ferror(f); }
 int feof_fake(FILE *f) { if (is_fake_file(f)) return 1; return feof(f); }
 int fileno_fake(FILE *f) { if (is_fake_file(f)) return ((const uint8_t *)f - &fake_sF[0][0]) / 0x100; return fileno(f); }
 int fseek_fake(FILE *f, long off, int whence) { if (is_fake_file(f)) return -1; return fseek(f, off, whence); }
+void rewind_fake(void *f) { fseek_fake(f, 0, SEEK_SET); }
 long ftell_fake(FILE *f) { if (is_fake_file(f)) return -1; return ftell(f); }
 int getc_fake(FILE *f) { if (is_fake_file(f)) return -1; return getc(f); }
 int fgetc_fake(FILE *f) { if (is_fake_file(f)) return -1; return fgetc(f); }

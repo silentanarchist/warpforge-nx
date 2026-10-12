@@ -40,6 +40,7 @@
 #include "config.h"
 #include "cloverpit_touch.h"
 #include "cloverpit_touchhook.h"
+#include "warpforge_resolve.h"
 
 /* UnityEngine.Vector3 is returned in the first three FP registers. */
 typedef struct { float x, y, z; } V3;
@@ -90,29 +91,31 @@ static uint8_t hk_GetMouseButtonUp(int b)   { (void)b; return 0; }
 static uint8_t hk_touchSupported(void)   { return 0; }
 static int32_t hk_touchCount(void)       { return 0; }
 
-typedef struct { const char *name; uint32_t rva, guard; void *fn; } TouchHook;
 
 int cp_touchhook_install(so_module *il2cpp) {
-  const TouchHook H[] = {
-    { "get_mousePosition",   RVA_Input_get_mousePosition,  GUARD_Input_get_mousePosition,  (void *)hk_mousePosition },
-    { "get_mousePresent",    RVA_Input_get_mousePresent,   GUARD_Input_stp_prologue,       (void *)hk_mousePresent },
-    { "get_touchSupported",  RVA_Input_get_touchSupported, GUARD_Input_stp_prologue,       (void *)hk_touchSupported },
-    { "get_touchCount",      RVA_Input_get_touchCount,     GUARD_Input_stp_prologue,       (void *)hk_touchCount },
-    { "GetMouseButton",      RVA_Input_GetMouseButton,     GUARD_Input_str_prologue,       (void *)hk_GetMouseButton },
-    { "GetMouseButtonDown",  RVA_Input_GetMouseButtonDown, GUARD_Input_str_prologue,       (void *)hk_GetMouseButtonDown },
-    { "GetMouseButtonUp",    RVA_Input_GetMouseButtonUp,   GUARD_Input_str_prologue,       (void *)hk_GetMouseButtonUp },
+  (void)il2cpp;
+  /* WARPFORGE: resolved by name through libil2cpp (warpforge_resolve.c); called
+   * from the render loop once the runtime is up. argc distinguishes the
+   * GetMouseButton*(int) overloads from the property getters. */
+  const struct { const char *name; int argc; void *fn; } H[] = {
+    { "get_mousePosition",  0, (void *)hk_mousePosition },
+    { "get_mousePresent",   0, (void *)hk_mousePresent },
+    { "get_touchSupported", 0, (void *)hk_touchSupported },
+    { "get_touchCount",     0, (void *)hk_touchCount },
+    { "GetMouseButton",     1, (void *)hk_GetMouseButton },
+    { "GetMouseButtonDown", 1, (void *)hk_GetMouseButtonDown },
+    { "GetMouseButtonUp",   1, (void *)hk_GetMouseButtonUp },
   };
   const int n = (int)(sizeof(H) / sizeof(H[0]));
-  uintptr_t base = (uintptr_t)il2cpp->load_virtbase;
   int applied = 0;
   for (int i = 0; i < n; i++) {
-    uint32_t got = *(volatile uint32_t *)(base + H[i].rva);
-    if (got != H[i].guard) {
-      debugPrintf("[touch] %-20s SKIP (guard %08x, found %08x)\n",
-                  H[i].name, H[i].guard, got);
+    void *at = wf_resolve_method("UnityEngine.InputLegacyModule.dll", "UnityEngine", "Input",
+                                 H[i].name, H[i].argc);
+    if (!at) {
+      debugPrintf("[touch] %-20s SKIP (not resolved)\n", H[i].name);
       continue;
     }
-    hook_arm64(base + H[i].rva, (uintptr_t)H[i].fn);
+    hook_arm64((uintptr_t)at, (uintptr_t)H[i].fn);
     applied++;
   }
 #if CP_ENABLE_POINTER_INPUT

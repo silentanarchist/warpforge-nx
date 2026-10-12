@@ -17,10 +17,10 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET      := cloverpit_nx
-APP_TITLE   := CloverPit
-APP_AUTHOR  := ChanseyIsTheBest
-APP_VERSION := 1.0.0
+TARGET      := warpforge_nx
+APP_TITLE   := Warpforge
+APP_AUTHOR  := silentanarchist
+APP_VERSION := 0.0.1
 APP_ICON    := $(TOPDIR)/icon.jpg
 export APP_TITLE APP_AUTHOR APP_VERSION APP_ICON
 BUILD    := build
