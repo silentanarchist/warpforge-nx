@@ -48,7 +48,53 @@ static int    g_live;             /* connections being carried */
 typedef struct { Thread thread; int used; volatile int done; int local; } conn_t;
 static conn_t g_conns[MAX_CONNS];
 
-static void carry(void *arg) {
+/* Two threads per connection, one per direction. The single poll loop before
+ * this only woke on the server side (libnx's poll did not report the loopback
+ * socket readable), so the game's sends piled up until Photon's ping blocked
+ * the main thread for 20 s at a time in battle. The TLS context is not
+ * thread-safe, so the downstream thread waits for data with poll (outside the
+ * lock) and both take the lock only around the actual TLS read/write. */
+typedef struct {
+  conn_t *c; void *tls; int local;
+  Mutex lock;
+  volatile int closing;
+  long up, down;
+  Thread down_thread;
+} link_t;
+extern void wf_tls_abort(void *h);
+
+static void carry_down(void *arg) {           /* server -> game */
+  link_t *l = arg;
+  unsigned char buf[16384];
+  unsigned n_logged = 0;
+  const char *why = NULL;
+  while (!l->closing) {
+    if (!wf_tls_pending(l->tls)) {
+      struct pollfd p = { .fd = wf_tls_fd(l->tls), .events = POLLIN };
+      int r = poll(&p, 1, 1000);
+      if (r < 0 && errno != EINTR) { why = "poll failed"; break; }
+      if (r <= 0) continue;
+    }
+    mutexLock(&l->lock);
+    int n = l->closing ? -1 : wf_tls_read(l->tls, buf, (int)sizeof buf);
+    mutexUnlock(&l->lock);
+    if (n == 0) { why = "the server closed it"; break; }
+    if (n < 0) { if (!l->closing) why = "TLS read failed"; break; }
+    l->down += n; if (++n_logged <= 3) debugPrintf("[tunnel] %d: server -> game %d bytes\n", l->local, n);
+    int done = 0;
+    while (done < n) {
+      ssize_t w = send(l->local, buf + done, (size_t)(n - done), 0);
+      if (w <= 0) { why = "send to the game failed"; break; }
+      done += (int)w;
+    }
+    if (done < n) break;
+  }
+  if (why && !l->closing) debugPrintf("[tunnel] %d: %s\n", l->local, why);
+  l->closing = 1;
+  shutdown(l->local, SHUT_RDWR);            /* wakes the upstream thread's recv */
+}
+
+static void carry(void *arg) {                /* game -> server, and the connection's owner */
   conn_t *c = arg;
   int local = c->local;
   char host[256]; int port;
@@ -66,39 +112,34 @@ static void carry(void *arg) {
   debugPrintf("[tunnel] match connection %d open to %s:%d\n", local, host, port);
   int one = 1; setsockopt(local, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 
+  link_t *l = calloc(1, sizeof *l);
+  l->c = c; l->tls = tls; l->local = local; mutexInit(&l->lock);
+  int have_down = 0;
+  Result rc = threadCreate(&l->down_thread, carry_down, l, NULL, 128 * 1024, 0x3B, -2);
+  if (R_SUCCEEDED(rc)) rc = threadStart(&l->down_thread);
+  if (R_SUCCEEDED(rc)) have_down = 1;
+  else debugPrintf("[tunnel] %d: could not start the downstream thread (0x%x)\n", local, rc);
+
   unsigned char buf[16384];
+  unsigned n_logged = 0;
   const char *why = "closed";
-  long up = 0, down = 0; unsigned nup = 0, ndown = 0;
-  for (;;) {
-    struct pollfd p[2] = { { .fd = local, .events = POLLIN }, { .fd = wf_tls_fd(tls), .events = POLLIN } };
-    int pending = wf_tls_pending(tls);
-    int r = pending ? 1 : poll(p, 2, 60000);
-    if (r < 0) { if (errno == EINTR) continue; why = "poll failed"; break; }
-    if (r == 0) continue;                       /* idle: keep waiting */
-    if (p[0].revents & (POLLIN | POLLHUP | POLLERR)) {
-      ssize_t n = recv(local, buf, sizeof buf, 0);
-      if (n <= 0) { why = n == 0 ? "the game closed it" : "recv failed"; break; }
-      if (wf_tls_write(tls, buf, (int)n) < 0) { why = "TLS write failed"; break; }
-      up += n; if (++nup <= 3) debugPrintf("[tunnel] %d: game -> server %d bytes\n", local, (int)n);
-    }
-    if (pending || (p[1].revents & (POLLIN | POLLHUP | POLLERR))) {
-      int n = wf_tls_read(tls, buf, (int)sizeof buf);
-      if (n == 0) { why = "the server closed it"; break; }
-      if (n < 0) { why = "TLS read failed"; break; }
-      down += n; if (++ndown <= 3) debugPrintf("[tunnel] %d: server -> game %d bytes\n", local, n);
-      int done = 0;
-      while (done < n) {
-        ssize_t w = send(local, buf + done, (size_t)(n - done), 0);
-        if (w <= 0) { why = "send failed"; break; }
-        done += (int)w;
-      }
-      if (done < n) break;
-    }
+  while (have_down && !l->closing) {
+    ssize_t n = recv(local, buf, sizeof buf, 0);
+    if (n <= 0) { why = n == 0 ? "the game closed it" : "recv from the game failed"; break; }
+    mutexLock(&l->lock);
+    int w = l->closing ? -1 : wf_tls_write(tls, buf, (int)n);
+    mutexUnlock(&l->lock);
+    if (w < 0) { why = l->closing ? "the server side ended" : "TLS write failed"; break; }
+    l->up += n; if (++n_logged <= 3) debugPrintf("[tunnel] %d: game -> server %d bytes\n", local, (int)n);
   }
-  debugPrintf("[tunnel] match connection %d ended: %s (%ld bytes up, %ld down)\n", local, why, up, down);
+  l->closing = 1;
+  wf_tls_abort(tls);                          /* wakes the downstream thread's poll/read */
+  if (have_down) { threadWaitForExit(&l->down_thread); threadClose(&l->down_thread); }
+  debugPrintf("[tunnel] match connection %d ended: %s (%ld bytes up, %ld down)\n", local, why, l->up, l->down);
   wf_tls_close(tls);
   shutdown(local, SHUT_RDWR);
   close(local);
+  free(l);
   __atomic_fetch_sub(&g_live, 1, __ATOMIC_SEQ_CST);
   __atomic_store_n(&c->done, 1, __ATOMIC_SEQ_CST);
 }
