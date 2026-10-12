@@ -22,14 +22,17 @@ int32_t SystemNative_Socket_Hook(int32_t addressFamily, int32_t socketType, int3
  * Report that case as EBADF, which is what it means here. */
 int32_t SystemNative_Poll_Hook(void *pollEvents, uint32_t eventCount, int32_t milliseconds, uint32_t *triggered)
 {
-    extern int32_t SystemNative_Poll(void *pollEvents, uint32_t eventCount, int32_t milliseconds, uint32_t *triggered);
-    extern int32_t SystemNative_ConvertErrorPlatformToPal(int32_t platformErrno);
+    /* declared the way SYM_RESOLVE below declares them, called through typed pointers */
+    extern void *SystemNative_Poll();
+    extern void *SystemNative_ConvertErrorPlatformToPal();
+    int32_t (*poll_fn)(void *, uint32_t, int32_t, uint32_t *) = (int32_t (*)(void *, uint32_t, int32_t, uint32_t *))(void *)SystemNative_Poll;
+    int32_t (*to_pal)(int32_t) = (int32_t (*)(int32_t))(void *)SystemNative_ConvertErrorPlatformToPal;
     static int32_t pal_enotsock, pal_ebadf;
     if (!pal_ebadf) {
-        pal_enotsock = SystemNative_ConvertErrorPlatformToPal(ENOTSOCK);
-        pal_ebadf = SystemNative_ConvertErrorPlatformToPal(EBADF);
+        pal_enotsock = to_pal(ENOTSOCK);
+        pal_ebadf = to_pal(EBADF);
     }
-    int32_t r = SystemNative_Poll(pollEvents, eventCount, milliseconds, triggered);
+    int32_t r = poll_fn(pollEvents, eventCount, milliseconds, triggered);
     if (r == pal_enotsock) {
         static int logged;
         if (!logged) { logged = 1; io_debugf("SystemNative_Poll: ENOTSOCK reported as EBADF (a polled socket was closed)"); }
