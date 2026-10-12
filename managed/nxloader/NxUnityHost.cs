@@ -16,7 +16,35 @@ namespace WarpforgeNx
         static object s_component;
 
         // Called from the emitted component's methods.
-        public static void OnGUI() { MelonLoader.Switch.NxHost.OnGUI(); }
+        public static void OnGUI() { TraceEvent(); MelonLoader.Switch.NxHost.OnGUI(); }
+
+        // Diagnostic: the first pointer events IMGUI sees (type + position), so a dead
+        // mod window can be told apart from touches that never reach IMGUI at all.
+        static PropertyInfo s_evCurrent, s_evType, s_evPos;
+        static int s_traced, s_evFailed;
+        static void TraceEvent()
+        {
+            if (s_traced >= 24 || s_evFailed > 0) return;
+            try
+            {
+                if (s_evCurrent == null)
+                {
+                    var imgui = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "UnityEngine.IMGUIModule")
+                                ?? Assembly.Load("UnityEngine.IMGUIModule");
+                    var ev = imgui.GetType("UnityEngine.Event", true);
+                    s_evCurrent = ev.GetProperty("current", BindingFlags.Public | BindingFlags.Static);
+                    s_evType = ev.GetProperty("type", BindingFlags.Public | BindingFlags.Instance);
+                    s_evPos = ev.GetProperty("mousePosition", BindingFlags.Public | BindingFlags.Instance);
+                }
+                var cur = s_evCurrent.GetValue(null);
+                if (cur == null) return;
+                var type = s_evType.GetValue(cur)?.ToString() ?? "?";
+                if (type == "Repaint" || type == "Layout" || type == "Ignore" || type == "Used") return;
+                s_traced++;
+                Entry.Log($"loader: IMGUI event {type} at {s_evPos.GetValue(cur)}");
+            }
+            catch (Exception e) { s_evFailed++; Entry.Log("loader: IMGUI event trace off: " + e.Message); }
+        }
         public static void OnApplicationQuit() { MelonLoader.Switch.NxHost.Quit(); }
 
         public static void Create()
