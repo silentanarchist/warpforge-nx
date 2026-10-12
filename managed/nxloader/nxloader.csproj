@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="$(Il2CppInteropDir)/Il2CppInterop.Runtime/Il2CppInterop.Runtime.csproj" />
     <ProjectReference Include="$(Il2CppInteropDir)/Il2CppInterop.HarmonySupport/Il2CppInterop.HarmonySupport.csproj" />
+    <ProjectReference Include="../melonlite/melonlite.csproj" />
     <!-- compile-time reference only; the game's own generated Il2Cppmscorlib loads at run time -->
     <Reference Include="Il2Cppmscorlib">
       <HintPath>$(Il2CppInteropDir)/Il2CppInterop.Runtime/Libs/Il2Cppmscorlib.dll</HintPath>

@@ -44,6 +44,7 @@ jobs:
           mkdir -p pkg/MelonLoader/Loader pkg/MelonLoader/Il2CppAssemblies pkg/MelonLoader/Mods pkg/MelonLoader/UserData
           cp loader/*.dll pkg/MelonLoader/Loader/
           echo "Copy your refs\\il2cpp\\*.dll here (the generated Il2Cpp assemblies)." > pkg/MelonLoader/Il2CppAssemblies/README.txt
+          echo "Put mods here, e.g. WarpforgeRevival.Android.dll." > pkg/MelonLoader/Mods/README.txt
           cd pkg && zip -qr ../loader_sd.zip MelonLoader && cd .. && ls -la loader_sd.zip
       - uses: actions/upload-artifact@v4
         with:

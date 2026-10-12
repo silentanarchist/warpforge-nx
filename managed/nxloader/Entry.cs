@@ -51,16 +51,29 @@ namespace WarpforgeNx
             return 0;
         }
 
+        static bool s_modsLoaded;
+
         public static int OnIl2CppReady()
         {
-            try { StackProbe(); return 0; }
-            catch (Exception e) { Log("loader: stack probe FAILED -- " + e); return -1; }
+            try { StackProbe(); }
+            catch (Exception e) { Log("loader: stack probe FAILED -- " + e); }
+            if (s_runtime == null) { Log("loader: Il2CppInterop is not running -- mods not loaded"); return -1; }
+            try
+            {
+                MelonLoader.Utils.MelonEnvironment.Initialize(MelonDir);
+                int n = MelonLoader.Switch.NxHost.LoadMods();
+                s_modsLoaded = true;
+                Log($"loader: {n} mod(s) loaded");
+            }
+            catch (Exception e) { Log("loader: loading mods FAILED -- " + e); }
+            return 0;
         }
 
         public static void OnUpdate()
         {
             s_frames++;
             if (s_frames == 1 || s_frames == 600 || s_frames == 3600) Log($"loader: OnUpdate frame {s_frames}");
+            if (s_modsLoaded) MelonLoader.Switch.NxHost.Update();
         }
 
         // Kept free of any Il2Cpp* type: the interpreter resolves every type a method
@@ -91,6 +104,8 @@ namespace WarpforgeNx
             NxMonoModPlatforms.Install();
             Log("loader: MonoMod platforms replaced (no managed-code patching under the interpreter)");
             NxMonoModFixes.Install();
+            // Harmony patches on game methods: native detour only (il2cppinterop-switch.patch)
+            AppContext.SetSwitch("Il2CppInterop.HarmonySupport.NoManagedDetour", true);
 
             // 2. the interop runtime, the way MelonLoader's Il2Cpp support module does it
             s_runtime = Il2CppInteropRuntime.Create(new RuntimeConfiguration
@@ -100,6 +115,15 @@ namespace WarpforgeNx
             }).AddLogger(new NxLogger()).AddHarmonySupport();
             s_runtime.Start();
             Log("loader: Il2CppInteropRuntime started");
+            try { ProbeChecks(); }
+            catch (Exception e) { Log("loader: probe check FAILED (mods still load) -- " + e); }
+            try { ConvertDelegateCheck(); }
+            catch (Exception e) { Log("loader: ConvertDelegate check FAILED (mods still load) -- " + e); }
+            Log("loader: stack probe done");
+        }
+
+        static void ProbeChecks()
+        {
 
             // 3. a static property through the generated proxy (UnityEngine.CoreModule.dll)
             var appType = Type.GetType("UnityEngine.Application, UnityEngine.CoreModule", throwOnError: false);
@@ -112,21 +136,21 @@ namespace WarpforgeNx
             // 4. a Harmony patch on a game method through the proxies -> Il2CppDetourMethodPatcher -> NxDetourProvider.
             //    No MonoMod managed detour under the interpreter (see il2cppinterop-switch.patch), so the patch
             //    is seen by callers that go through il2cpp -- the game itself -- which is what mods need.
-            AppContext.SetSwitch("Il2CppInterop.HarmonySupport.NoManagedDetour", true);
             Log("loader: patching Application.productName with Harmony ...");
             var harmony = new Harmony("WarpforgeNx.StackProbe");
             var getter = appType.GetProperty("productName", BindingFlags.Public | BindingFlags.Static).GetGetMethod();
             harmony.Patch(getter, postfix: new HarmonyMethod(typeof(Entry).GetMethod(nameof(ProductNamePostfix), BindingFlags.NonPublic | BindingFlags.Static)));
             Log("loader: patch applied");
             Log($"loader: productName as the game sees it = \"{ProductNameViaIl2Cpp()}\" (expected \"Warpforge [patched]\")");
+        }
 
+        static void ConvertDelegateCheck()
+        {
             // 5. DelegateSupport.ConvertDelegate: a managed lambda as an Il2CppSystem.Action, invoked by il2cpp
             int fired = 0;
             var action = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>(new Action(() => { fired++; Log("loader: Il2CppSystem.Action fired -> managed lambda ran"); }));
             action.Invoke();
             Log($"loader: ConvertDelegate {(fired == 1 ? "ok" : "did NOT fire")}");
-
-            Log("loader: stack probe done");
         }
 
         static void ProductNamePostfix(ref string __result) { __result += " [patched]"; }

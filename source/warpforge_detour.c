@@ -34,7 +34,7 @@
 #include "util.h"
 
 #define SLOT_BYTES   128
-#define SLOT_COUNT   64
+#define SLOT_COUNT   1024        /* the mod alone applies ~215 Harmony hooks */
 #define REGION_BYTES (SLOT_BYTES * SLOT_COUNT)
 #define DISPLACED    4           /* instructions hook_arm64 overwrites */
 

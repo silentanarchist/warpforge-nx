@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- "MelonLoader-lite": the part of MelonLoader's public API that MelonLoader mods
+       (here: Warpforge Revival) use, re-implemented for warpforge_nx on the Switch, where
+       the real loader cannot run (Mono interpreter, no JNI/NativeAOT bootstrap). Same
+       assembly name, version and type signatures as MelonLoader 0.7.1, so a mod built
+       against the real MelonLoader binds to it unchanged. ColorARGB.cs is MelonLoader's
+       own file (Apache-2.0, see LICENSE-MelonLoader.md). -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>MelonLoader</AssemblyName>
+    <RootNamespace>MelonLoader</RootNamespace>
+    <AssemblyVersion>0.7.1.0</AssemblyVersion>
+    <FileVersion>0.7.1.0</FileVersion>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CS1591;CS0067</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="HarmonyX" Version="2.10.2" />
+  </ItemGroup>
+</Project>
