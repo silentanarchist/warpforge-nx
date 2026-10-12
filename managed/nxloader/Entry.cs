@@ -45,7 +45,13 @@ namespace WarpforgeNx
             Log($"loader: {RuntimeInformation.FrameworkDescription}, Il2CppInterop.Runtime {typeof(Il2CppInteropRuntime).Assembly.GetName().Version}, HarmonyX {typeof(Harmony).Assembly.GetName().Version}");
             AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
             {
-                var name = new AssemblyName(e.Name).Name + ".dll";
+                var simple = new AssemblyName(e.Name).Name;
+                // An assembly that is already loaded is THE copy: Harmony resolves a mod by name
+                // while building its patch wrappers, and loading the file again gave a second
+                // copy with uninitialised statics (every hook then threw NullReferenceException).
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                    if (a.GetName().Name == simple) return a;
+                var name = simple + ".dll";
                 foreach (var dir in new[] { Il2CppAssembliesDir, Path.Combine(MelonDir, "Loader"), Path.Combine(MelonDir, "Mods") })
                 {
                     var p = Path.Combine(dir, name);

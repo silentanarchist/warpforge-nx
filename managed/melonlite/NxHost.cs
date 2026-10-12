@@ -31,10 +31,22 @@ namespace MelonLoader.Switch
         static void LoadMod(string file)
         {
             MelonLogger.Msg($"Loading {Path.GetFileName(file)} ...");
-            byte[] shimmed = null;
-            try { shimmed = NxModShims.Apply(file); }
-            catch (Exception e) { MelonLogger.Warning($"[switch] could not adjust {Path.GetFileName(file)} for the Switch ({e.GetType().Name}: {e.Message}); loading it as it is"); }
-            var asm = shimmed != null ? Assembly.Load(shimmed) : Assembly.LoadFrom(file);
+            // The Switch-adjusted copy is a real file (under UserData/.switch), so every
+            // resolver that goes by location or name lands on the same loaded assembly.
+            string load = file;
+            try
+            {
+                var shimmed = NxModShims.Apply(file);
+                if (shimmed != null)
+                {
+                    var dir = Path.Combine(Utils.MelonEnvironment.UserDataDirectory, ".switch");
+                    Directory.CreateDirectory(dir);
+                    load = Path.Combine(dir, Path.GetFileName(file));
+                    File.WriteAllBytes(load, shimmed);
+                }
+            }
+            catch (Exception e) { MelonLogger.Warning($"[switch] could not adjust {Path.GetFileName(file)} for the Switch ({e.GetType().Name}: {e.Message}); loading it as it is"); load = file; }
+            var asm = Assembly.LoadFrom(load);
             var info = asm.GetCustomAttribute<MelonInfoAttribute>();
             if (info == null) { MelonLogger.Warning($"{Path.GetFileName(file)} has no [MelonInfo] -- not a mod, skipped"); return; }
             if (!typeof(MelonBase).IsAssignableFrom(info.SystemType)) { MelonLogger.Error($"{info.Name}: {info.SystemType} is not a MelonMod"); return; }
