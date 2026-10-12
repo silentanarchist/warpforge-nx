@@ -64,6 +64,9 @@ void wf_softinput_show(void *thiz, const char *text, int type, int multiline, in
 
 static void run_keyboard(void *arg) {
   kbd_req_t *r = arg;
+  /* the engine's natives read bionic TLS (tpidr_el0); a bare libnx thread has none */
+  static uint8_t tls[BIONIC_TLS_SIZE];
+  install_bionic_tls(tls);
   void *thiz = r->thiz; const char *text = r->text; const char *placeholder = r->hint;
   int type = r->type, multiline = r->multiline, secure = r->secure, char_limit = r->limit;
   fn_bool set_visible = jni_lookup_unity_native("nativeSetKeyboardIsVisible");
