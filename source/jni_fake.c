@@ -552,8 +552,22 @@ static void *act_object(const FakeID *id, va_list va) {
     return get_asset_manager_obj();
   if (name_has(id->name, "ClassLoader") || sig_returns(id->sig, "Ljava/lang/ClassLoader;"))
     return get_classloader_obj();
-  if (sig_returns(id->sig, "Ljava/lang/Class;"))
+  if (sig_returns(id->sig, "Ljava/lang/Class;")) {
+    /* ClassLoader.loadClass(name) / Class.forName(name): every class used to come back
+     * as java/lang/Object, so IsInstanceOf could not tell a KeyEvent from a MotionEvent
+     * and injected touches were taken for key presses. The input event classes get
+     * their real names; everything else stays as it was (dispatch keys off the names). */
+    if (name_has(id->name, "loadClass") || name_has(id->name, "forName")) {
+      void *jname = va_arg(va, void *);
+      const char *n = jname ? jni_string_utf(jname) : NULL;
+      if (n && (strstr(n, "MotionEvent") || strstr(n, "KeyEvent") || strstr(n, "InputEvent"))) {
+        char buf[128]; snprintf(buf, sizeof buf, "%s", n);
+        for (char *q = buf; *q; q++) if (*q == '.') *q = '/';
+        return intern_class(buf);
+      }
+    }
     return intern_class("java/lang/Object");
+  }
   // version / package / device / storage strings
   if (name_has(id->name, "VersionName")) return jni_make_string(CS_VERSION_NAME);
   if (name_has(id->name, "PackageName")) return jni_make_string(CS_PACKAGE);
