@@ -1102,9 +1102,16 @@ static uint8_t *oc_base;        // stack-region window base (256MB-aligned)
 static size_t   oc_pages;       // window size in pages (0 => OC disabled)
 static uint8_t *oc_used;        // 1/page: address space reserved by an mmap
 static uint8_t *oc_committed;   // 1/page: physically backed via svcMapMemory
-static uint8_t *oc_pool;        // commit-pool base (heap, page-aligned)
-static size_t   oc_pool_pages;  // pool capacity in pages
-static size_t   oc_pool_bump;   // next free pool page (bump; no reclaim)
+static uint8_t *oc_pool;        // current commit-pool chunk (heap, page-aligned)
+static size_t   oc_pool_pages;  // chunk capacity in pages
+static size_t   oc_pool_bump;   // next free page in the chunk (bump; no reclaim)
+static size_t   oc_pool_total;  // pages across all chunks (stats)
+static size_t   oc_pool_used;   // pages handed out across all chunks (stats)
+// The pool grows: when a chunk is used up, another is taken from the heap. A
+// fixed 896 MB starved the heap at the menu; a fixed 512 MB ran out at the first
+// battle (463 MB at the menu, 500+ in battle). Growing means the heap and the
+// pool share the same free memory instead of guessing the split up front.
+#define OC_GROW_BYTES ((size_t)64 * 1024 * 1024)
 static size_t   oc_live_pages;  // committed pages (diagnostic)
 
 // Called once from main() after the newlib heap exists. window = a reserved
@@ -1119,13 +1126,14 @@ int oc_arena_init(void *window, size_t window_bytes, void *pool, size_t pool_byt
   oc_base = (uint8_t *)window; oc_pages = wp; oc_used = u; oc_committed = c;
   oc_pool = (uint8_t *)pool; oc_pool_pages = pool_bytes / MMAP_PAGE;
   oc_pool_bump = 0; oc_live_pages = 0;
+  oc_pool_total = oc_pool_pages; oc_pool_used = 0;
   mutexUnlock(&g_mmap_lock);
   return 1;
 }
 
 void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb) {
-  *used_mb = (unsigned)((oc_pool_bump * MMAP_PAGE) >> 20);
-  *cap_mb  = (unsigned)((oc_pool_pages * MMAP_PAGE) >> 20);
+  *used_mb = (unsigned)((oc_pool_used * MMAP_PAGE) >> 20);
+  *cap_mb  = (unsigned)((oc_pool_total * MMAP_PAGE) >> 20);
 }
 
 static int oc_contains(void *addr) {
@@ -1209,11 +1217,20 @@ static void oc_commit_locked(void *addr, size_t len) {
     if (oc_committed[first + i]) { i++; continue; }
     size_t run = 0;
     while (i + run < cnt && !oc_committed[first + i + run]) run++;
-    if (oc_pool_bump + run > oc_pool_pages) {
-      debugPrintf("[oc] commit-pool EXHAUSTED: need %zu pages, %zu left (live %zu MB)\n",
-                  run, oc_pool_pages - oc_pool_bump, (oc_live_pages * MMAP_PAGE) >> 20);
-      return;   // can't back; touching it would fault (shouldn't happen at pool size)
+    if (oc_pool_bump >= oc_pool_pages) {
+      extern void *__real_memalign(size_t, size_t);
+      uint8_t *chunk = __real_memalign(MMAP_PAGE, OC_GROW_BYTES);
+      if (!chunk) {
+        debugPrintf("[oc] commit-pool EXHAUSTED and the heap has no %u MB chunk left: need %zu pages (live %zu MB)\n",
+                    (unsigned)(OC_GROW_BYTES >> 20), run, (oc_live_pages * MMAP_PAGE) >> 20);
+        return;   // can't back; touching it would fault
+      }
+      oc_pool = chunk; oc_pool_pages = OC_GROW_BYTES / MMAP_PAGE; oc_pool_bump = 0;
+      oc_pool_total += oc_pool_pages;
+      debugPrintf("[oc] commit-pool grew by %u MB (now %zu MB, %zu MB used)\n",
+                  (unsigned)(OC_GROW_BYTES >> 20), (oc_pool_total * MMAP_PAGE) >> 20, (oc_pool_used * MMAP_PAGE) >> 20);
     }
+    if (run > oc_pool_pages - oc_pool_bump) run = oc_pool_pages - oc_pool_bump;   // the rest next round
     void *dst = oc_base + (first + i) * MMAP_PAGE;
     void *src = oc_pool + oc_pool_bump * MMAP_PAGE;
     Result rc = svcMapMemory(dst, src, (u64)run * MMAP_PAGE);
@@ -1231,11 +1248,11 @@ static void oc_commit_locked(void *addr, size_t len) {
     }
     memset(dst, 0, run * MMAP_PAGE);   // freshly committed anon must read as zero
     for (size_t k = 0; k < run; k++) oc_committed[first + i + k] = 1;
-    oc_pool_bump += run; oc_live_pages += run;
+    oc_pool_bump += run; oc_pool_used += run; oc_live_pages += run;
     if (((oc_live_pages * MMAP_PAGE) >> 24) != (((oc_live_pages - run) * MMAP_PAGE) >> 24))
       if (TRACE_MMAP) debugPrintf("[oc] committed %zu MB (pool %zu/%zu MB)\n",
                   (oc_live_pages * MMAP_PAGE) >> 20,
-                  (oc_pool_bump * MMAP_PAGE) >> 20, (oc_pool_pages * MMAP_PAGE) >> 20);
+                  (oc_pool_used * MMAP_PAGE) >> 20, (oc_pool_total * MMAP_PAGE) >> 20);
     i += run;
   }
 }
