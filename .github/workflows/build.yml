@@ -28,10 +28,11 @@ jobs:
           dotnet build managed/mono_hello -c Release -o out
           ls -la out/mono_hello.dll
       # The loader builds Il2CppInterop from the owner's ARM64 fork (LGPL-3.0; the
-      # fork is the source of the "1.5.0-arm64c" build the phone runs).
+      # branch emulator-module-lookup = the owner's Warpforge changes (KnownTargets,
+      # FastPath, ArgumentGuard) on top of six upstream fixes; what the phone runs.
       - name: Fetch Il2CppInterop (ARM64 fork)
         run: |
-          git clone --depth 1 https://github.com/silentanarchist/Il2CppInteropARM64 extern/Il2CppInteropARM64
+          git clone --depth 1 -b emulator-module-lookup https://github.com/silentanarchist/Il2CppInteropARM64 extern/Il2CppInteropARM64
           cd extern/Il2CppInteropARM64 && git log -1 --oneline
       - name: Build nxloader
         run: |
