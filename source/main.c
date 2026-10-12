@@ -395,6 +395,15 @@ int main(int argc, char *argv[]) {
   cp_resolve_game_root(argc, argv);
 
   socketInitializeDefault();
+  {
+    /* The game's TLS checks certificate validity against this clock; a console
+     * whose date is off fails verification with Unity's "Unknown error". */
+    time_t now = time(NULL);
+    struct tm *g = gmtime(&now);
+    if (g) debugPrintf("[boot] clock: %04d-%02d-%02d %02d:%02d:%02d UTC (epoch %lld)\n",
+                       g->tm_year + 1900, g->tm_mon + 1, g->tm_mday, g->tm_hour, g->tm_min, g->tm_sec,
+                       (long long)now);
+  }
   debugPrintf("[boot] === warpforge_nx start (Warpforge 1.35.0, Unity 6000.2.6f2 / IL2CPP) ===\n");
   cp_root_report(argc, argv);
 
