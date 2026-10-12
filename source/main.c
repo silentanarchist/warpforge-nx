@@ -220,6 +220,63 @@ static void *oc_find_stack_window(size_t want, size_t *out_size) {
   return (void *)aligned;
 }
 
+/* TLS pages vs the OC window. The kernel keeps every thread's TLS block in
+ * 4 KB pages of 8 slots, allocated in the STACK region at a random free address
+ * (ASLR) -- and "free" includes our overcommit window, which is only reserved in
+ * libnx's allocator, not mapped. A TLS page that lands inside a range the engine
+ * has reserved but not yet committed makes the later svcMapMemory fail
+ * (0xd401) and the engine faults on the unbacked page: the "crash on loading in"
+ * seen about one run in five, with a type=0xc block in the window listing.
+ *
+ * The kernel only allocates a new TLS page when no existing page has a free
+ * slot, so pages made BEFORE the window exists and kept partially used serve
+ * every later thread. Here: batches of 8 threads are started (filling one new
+ * page); if that page lies outside the window, one thread is kept parked for
+ * the rest of the run (7 slots free), otherwise all 8 exit (page freed) and we
+ * try again. The parked threads' own stacks are placed by libnx, which honours
+ * the window reservation. 7 x SEED_PAGES slots cover the engine's ~40 threads,
+ * Mono's and ours with room for churn. */
+#define SEED_PAGES 24
+static volatile int  g_seed_cmd[SEED_PAGES * 8 * 4];     /* 0 wait, 1 exit, 2 stay */
+static volatile uintptr_t g_seed_tls[SEED_PAGES * 8 * 4];
+static void seed_thread(void *arg) {
+  int i = (int)(intptr_t)arg;
+  g_seed_tls[i] = (uintptr_t)armGetTls();
+  while (!g_seed_cmd[i]) svcSleepThread(200000);
+  if (g_seed_cmd[i] == 2) for (;;) svcSleepThread(60ull * 1000000000ull);
+}
+static void oc_seed_tls_pages(uintptr_t win_lo, uintptr_t win_hi) {
+  int kept = 0, batches = 0, idx = 0;
+  u64 t0 = armGetSystemTick();
+  while (kept < SEED_PAGES && batches < SEED_PAGES * 4 && idx + 8 <= (int)(sizeof g_seed_cmd / sizeof g_seed_cmd[0])) {
+    Thread th[8]; int made = 0;
+    for (int k = 0; k < 8; k++) {
+      Result rc = threadCreate(&th[k], seed_thread, (void *)(intptr_t)(idx + k), NULL, 0x1000, 0x3B, -2);
+      if (R_SUCCEEDED(rc)) rc = threadStart(&th[k]);
+      if (R_FAILED(rc)) break;
+      made++;
+    }
+    for (int spin = 0; spin < 2000; spin++) {        /* wait until all report their TLS */
+      int ok = 1; for (int k = 0; k < made; k++) if (!g_seed_tls[idx + k]) ok = 0;
+      if (ok) break; svcSleepThread(100000);
+    }
+    /* which pages did this batch land in? keep one thread per page outside the window */
+    int keep[8] = {0};
+    for (int k = 0; k < made; k++) {
+      uintptr_t page = g_seed_tls[idx + k] & ~(uintptr_t)0xfff;
+      if (!page || (page >= win_lo && page < win_hi)) continue;
+      int dup = 0; for (int j = 0; j < k; j++) if (keep[j] && (g_seed_tls[idx + j] & ~(uintptr_t)0xfff) == page) dup = 1;
+      if (!dup && kept < SEED_PAGES) { keep[k] = 1; kept++; }
+    }
+    for (int k = 0; k < made; k++) g_seed_cmd[idx + k] = keep[k] ? 2 : 1;
+    for (int k = 0; k < made; k++) if (!keep[k]) { threadWaitForExit(&th[k]); threadClose(&th[k]); }
+    idx += 8; batches++;
+    if (made < 8) break;
+  }
+  debugPrintf("[oc] TLS seed: %d pages kept outside the window (%d free slots) in %d batches, %u ms\n",
+              kept, kept * 7, batches, (unsigned)((armGetSystemTick() - t0) / (armGetSystemTickFreq() / 1000)));
+}
+
 static int overcommit_setup(void *addr, size_t size, size_t so_zone,
                             void **out_addr, size_t *out_fake) {
   (void)addr; (void)size; (void)so_zone; (void)out_addr; (void)out_fake;
@@ -540,10 +597,11 @@ int main(int argc, char *argv[]) {
     }
     if (win && rv && winsz) {
       pool = memalign(0x1000, OC_POOL_BYTES);
-      if (pool && oc_arena_init(win, winsz, pool, OC_POOL_BYTES))
+      if (pool && oc_arena_init(win, winsz, pool, OC_POOL_BYTES)) {
         debugPrintf("[oc] ARMED: window %u MB @ %p, pool %u MB @ %p\n",
                     (unsigned)(winsz >> 20), win, (unsigned)(OC_POOL_BYTES >> 20), pool);
-      else
+        oc_seed_tls_pages((uintptr_t)win, (uintptr_t)win + winsz);
+      } else
         debugPrintf("[oc] DISABLED: pool=%p init failed -> heap-backed only\n", pool);
     } else {
       debugPrintf("[oc] DISABLED: no usable stack hole -> heap-backed only\n");

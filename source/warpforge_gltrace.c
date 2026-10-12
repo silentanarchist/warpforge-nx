@@ -15,6 +15,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 #include <EGL/egl.h>
@@ -76,8 +77,11 @@ static void note(const char *call, GLenum ifmt, GLsizei w, GLsizei h, GLsizei de
   g_logged++;
   once_extensions();
   const char *n = fmt_name(ifmt);
-  if (n) debugPrintf("[gltrace] %s %s %dx%d%s%d levels=%d bytes=%d\n", call, n, (int)w, (int)h, depth > 1 ? "x" : "", depth > 1 ? (int)depth : 0, (int)levels, (int)bytes);
-  else   debugPrintf("[gltrace] %s 0x%04x %dx%d%s%d levels=%d bytes=%d\n", call, (unsigned)ifmt, (int)w, (int)h, depth > 1 ? "x" : "", depth > 1 ? (int)depth : 0, (int)levels, (int)bytes);
+  char dim[48];
+  if (depth > 1) snprintf(dim, sizeof dim, "%dx%dx%d", (int)w, (int)h, (int)depth);
+  else           snprintf(dim, sizeof dim, "%dx%d", (int)w, (int)h);
+  if (n) debugPrintf("[gltrace] %s %s %s levels=%d bytes=%d\n", call, n, dim, (int)levels, (int)bytes);
+  else   debugPrintf("[gltrace] %s 0x%04x %s levels=%d bytes=%d\n", call, (unsigned)ifmt, dim, (int)levels, (int)bytes);
   if (g_logged == TRACE_MAX) debugPrintf("[gltrace] (quiet from here)\n");
 }
 
