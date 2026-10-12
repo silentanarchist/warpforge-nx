@@ -32,6 +32,13 @@ void mono_nx_fakemmap_init(intptr_t memory_start, intptr_t memory_end);
 
 static intptr_t g_mono_lo, g_mono_hi;
 
+/* mono-nx's core.c calls this (its heap.c defined it; the wrapper's main.c owns
+ * __libnx_initheap instead). */
+void heap_debug(void) {
+  debugPrintf("[mono] fake-mmap range %p..%p (%u MB)\n", (void *)g_mono_lo, (void *)g_mono_hi,
+              (unsigned)((g_mono_hi - g_mono_lo) >> 20));
+}
+
 void wf_mono_heap_init(uintptr_t lo, uintptr_t hi) {
   g_mono_lo = (intptr_t)lo;
   g_mono_hi = (intptr_t)hi;
