@@ -204,6 +204,11 @@ void wf_tls_close(void *h) {
   free(t);
 }
 
+/* For a poll loop around the connection (warpforge_tunnel.c). */
+int wf_tls_fd(void *h) { wf_tls_t *t = h; return t ? t->fd : -1; }
+/* Bytes already decrypted and waiting: poll() on the socket would not show them. */
+int wf_tls_pending(void *h) { wf_tls_t *t = h; return t ? (int)mbedtls_ssl_get_bytes_avail(&t->ssl) : 0; }
+
 /* For cancellation: makes a blocked read/write return at once (the managed
  * side calls it from another thread, then wf_tls_close). */
 void wf_tls_abort(void *h) {

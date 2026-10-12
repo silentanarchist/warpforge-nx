@@ -24,6 +24,9 @@ namespace MelonLoader.Switch
             ("WarpforgeRevival.PlayFabTransport", "RewriteUrl", new[] { "System.String" },
              typeof(NxHttp).GetMethod(nameof(NxHttp.RewriteUrl)), new[] { "WarpforgeRevival.RevivalMod.Config", "WarpforgeRevival.RevivalConfig.ServerUrl" },
              "the game's PlayFab path already starts with /playfab on the Switch"),
+            ("WarpforgeRevival.MatchTunnel", "Start", new[] { "System.String", "System.Int32" },
+             typeof(NxTunnel).GetMethod(nameof(NxTunnel.Start)), null,
+             "the encrypted match tunnel runs in the wrapper (no SslStream on Mono NX)"),
         };
 
         public static byte[] Apply(string file)

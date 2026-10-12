@@ -171,4 +171,22 @@ namespace MelonLoader.Switch
             }
         }
     }
+
+    /// <summary>
+    /// The mod's encrypted match tunnel, carried by the wrapper (warpforge_tunnel.c) instead of a
+    /// TcpListener + SslStream: Mono NX has no SslStream backend, and its accept() path spun.
+    /// Takes the place of MatchTunnel.Start(host, port); returns the local port to connect to.
+    /// </summary>
+    public static class NxTunnel
+    {
+        [DllImport("warpforge")] static extern int wf_tunnel_start([MarshalAs(UnmanagedType.LPStr)] string host, int port);
+
+        public static int Start(string host, int port)
+        {
+            int local = wf_tunnel_start(host, port);
+            if (local <= 0) throw new IOException("the wrapper could not open the match tunnel");
+            MelonLogger.Msg("[switch] [match] matches are encrypted (through the wrapper's TLS to " + host + ":" + port + ")");
+            return local;
+        }
+    }
 }

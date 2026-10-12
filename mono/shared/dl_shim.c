@@ -189,6 +189,7 @@ void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_da
 				else if (!strcmp(name, "wf_tls_write"))   symbol = (void *)wf_tls_write;
 				else if (!strcmp(name, "wf_tls_close"))   symbol = (void *)wf_tls_close;
 				else if (!strcmp(name, "wf_tls_abort"))   symbol = (void *)wf_tls_abort;
+				else { extern int wf_tunnel_start(); if (!strcmp(name, "wf_tunnel_start")) symbol = (void *)wf_tunnel_start; }
 			}
 		}
 		if (!symbol && strncmp(name, "SystemNative_", 13) && strncmp(name, "GlobalizationNative_", 20))
