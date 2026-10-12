@@ -87,6 +87,9 @@ namespace WarpforgeNx
 
         static void InteropProbe()
         {
+            // before anything touches HarmonyX or MonoMod (see NxMonoModPlatforms.cs)
+            NxMonoModPlatforms.Install();
+            Log("loader: MonoMod platforms replaced (no managed-code patching under the interpreter)");
 
             // 2. the interop runtime, the way MelonLoader's Il2Cpp support module does it
             s_runtime = Il2CppInteropRuntime.Create(new RuntimeConfiguration
