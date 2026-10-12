@@ -160,6 +160,8 @@ namespace WarpforgeNx
             NxMonoModFixes.Install();
             // Harmony patches on game methods: native detour only (il2cppinterop-switch.patch)
             AppContext.SetSwitch("Il2CppInterop.HarmonySupport.NoManagedDetour", true);
+            // Il2CppInterop's FastPath stubs come from the wrapper (il2cppinterop-switch.patch)
+            AppContext.SetSwitch("Il2CppInterop.Switch", true);
 
             // 2. the interop runtime, the way MelonLoader's Il2Cpp support module does it
             s_runtime = Il2CppInteropRuntime.Create(new RuntimeConfiguration

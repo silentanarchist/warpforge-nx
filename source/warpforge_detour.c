@@ -29,6 +29,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include <switch.h>
 #include "so_util.h"
 #include "util.h"
@@ -38,9 +39,21 @@
 #define REGION_BYTES (SLOT_BYTES * SLOT_COUNT)
 #define DISPLACED    4           /* instructions hook_arm64 overwrites */
 
+/* One line per hook was ~215 lines (x2 with Il2CppInterop's own warning) for the
+ * mod alone; the first few are enough to see that hooking works. */
+static int g_verbose_left = 12;
+#define g_verbose (g_verbose_left > 0 ? (g_verbose_left--, 1) : 0)
+
 static Jit      g_jit;
 static int      g_jit_ok;
 static unsigned g_slots_used;
+
+/* What each hook overwrote, so it can be taken out again (Harmony re-patching a
+ * method first disposes its old hook; without this the old and new patches
+ * chained and both ran). Newest last; a target hooked twice has two entries. */
+typedef struct { uintptr_t target; uint32_t orig[4]; } hooked_t;
+static hooked_t g_hooked[SLOT_COUNT];
+static unsigned g_hooked_n;
 
 static int region_init(void) {
   if (g_jit_ok) return 0;
@@ -186,7 +199,62 @@ void *wf_detour_install(void *target, void *replacement) {
   g_slots_used++;
 
   hook_arm64((uintptr_t)target, (uintptr_t)replacement);
-  debugPrintf("[detour] %p -> %p, original via trampoline %p (%08x %08x %08x %08x)\n",
-              target, replacement, (void *)a.rx, orig[0], orig[1], orig[2], orig[3]);
+  if (g_hooked_n < SLOT_COUNT) {
+    g_hooked[g_hooked_n].target = (uintptr_t)target;
+    memcpy(g_hooked[g_hooked_n].orig, orig, sizeof orig);
+    g_hooked_n++;
+  }
+  if (g_verbose)
+    debugPrintf("[detour] %p -> %p, original via trampoline %p (%08x %08x %08x %08x)\n",
+                target, replacement, (void *)a.rx, orig[0], orig[1], orig[2], orig[3]);
   return (void *)a.rx;
+}
+
+/* Take the newest hook on `target` out: put back the 16 bytes it replaced.
+ * The trampoline slot is not reused. Returns 1 if a hook was removed. */
+int wf_detour_remove(void *target) {
+  for (int i = (int)g_hooked_n - 1; i >= 0; i--) {
+    if (g_hooked[i].target != (uintptr_t)target) continue;
+    so_patch_code(target, g_hooked[i].orig, sizeof g_hooked[i].orig);
+    memmove(&g_hooked[i], &g_hooked[i + 1], (g_hooked_n - (unsigned)i - 1) * sizeof g_hooked[0]);
+    g_hooked_n--;
+    if (g_verbose) debugPrintf("[detour] %p: hook removed\n", target);
+    return 1;
+  }
+  return 0;
+}
+
+/* Il2CppInterop's FastPath (owner's fork, FastPath.cs): a few instructions in
+ * front of a managed hook that send the common case straight back to the game's
+ * function, so tens of millions of calls during loading never enter managed code
+ * -- far more important here than on a phone, since managed code is interpreted.
+ * The phone builds the stub with mmap/mprotect; here it lives in the JIT region.
+ * kind 1: managed only when *(int64*)x0 < 0; kind 2: managed only when w0 < 0.
+ * Returns the trampoline to the game's own function (NULL on refusal). */
+void *wf_fastpath_install(void *target, void *managed, int kind) {
+  static const uint32_t via_pointer[8] = {
+    0xF9400010, 0xB7F80090, 0x580000D1, 0xF9400631, 0xD61F0220, 0x58000071, 0xF9400231, 0xD61F0220 };
+  static const uint32_t via_number[8] = {
+    0x37F80080, 0x580000F1, 0xF9400631, 0xD61F0220, 0x58000091, 0xF9400231, 0xD61F0220, 0xD503201F };
+  if (kind != 1 && kind != 2) return NULL;
+  if (region_init() < 0 || g_slots_used >= SLOT_COUNT) return NULL;
+  uintptr_t *slots = malloc(2 * sizeof(uintptr_t));        /* plain data, read by the stub */
+  if (!slots) return NULL;
+  slots[0] = (uintptr_t)managed;
+  slots[1] = (uintptr_t)managed;                             /* until the original is known */
+
+  unsigned slot = g_slots_used++;
+  jitTransitionToWritable(&g_jit);
+  uint32_t *rw = (uint32_t *)((uint8_t *)jitGetRwAddr(&g_jit) + slot * SLOT_BYTES);
+  memcpy(rw, kind == 1 ? via_pointer : via_number, 8 * 4);
+  *(uint64_t *)(rw + 8) = (uint64_t)(uintptr_t)slots;        /* the "slots" literal after the code */
+  armDCacheFlush(rw, SLOT_BYTES);
+  jitTransitionToExecutable(&g_jit);
+  void *stub = (uint8_t *)jitGetRxAddr(&g_jit) + slot * SLOT_BYTES;
+
+  void *orig = wf_detour_install(target, stub);
+  if (!orig) return NULL;
+  slots[1] = (uintptr_t)orig;
+  debugPrintf("[detour] %p: fast path in front of the managed hook (kind %d)\n", target, kind);
+  return orig;
 }

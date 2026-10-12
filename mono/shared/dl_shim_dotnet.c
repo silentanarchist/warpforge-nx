@@ -1,4 +1,7 @@
+#include <errno.h>
+#include <stdint.h>
 #include "dl_shim_base.h"
+#include "io_util.h"
 
 // I noticed that bsd would sometimes crash when running the nro multiple times.
 // This should have been fixed now but regardless, we only initialize sockets once if actually needed.
@@ -11,9 +14,35 @@ int32_t SystemNative_Socket_Hook(int32_t addressFamily, int32_t socketType, int3
     return SystemNative_Socket(addressFamily, socketType, protocolType, createdSocket);
 }
 
+/* WARPFORGE: mono-nx's SocketAsyncEngine (SocketAsyncEngine.Libnx.cs) polls every
+ * registered socket in one call and tolerates EBADF ("a socket was closed, it will
+ * be unregistered next round") but turns anything else into Environment.FailFast.
+ * libnx's poll reports a socket closed under it (an HttpClient request cancelled on
+ * timeout) as ENOTSOCK, which ended the whole game ~2 s after the mod started.
+ * Report that case as EBADF, which is what it means here. */
+int32_t SystemNative_Poll_Hook(void *pollEvents, uint32_t eventCount, int32_t milliseconds, uint32_t *triggered)
+{
+    extern int32_t SystemNative_Poll(void *pollEvents, uint32_t eventCount, int32_t milliseconds, uint32_t *triggered);
+    extern int32_t SystemNative_ConvertErrorPlatformToPal(int32_t platformErrno);
+    static int32_t pal_enotsock, pal_ebadf;
+    if (!pal_ebadf) {
+        pal_enotsock = SystemNative_ConvertErrorPlatformToPal(ENOTSOCK);
+        pal_ebadf = SystemNative_ConvertErrorPlatformToPal(EBADF);
+    }
+    int32_t r = SystemNative_Poll(pollEvents, eventCount, milliseconds, triggered);
+    if (r == pal_enotsock) {
+        static int logged;
+        if (!logged) { logged = 1; io_debugf("SystemNative_Poll: ENOTSOCK reported as EBADF (a polled socket was closed)"); }
+        if (triggered) *triggered = 0;
+        return pal_ebadf;
+    }
+    return r;
+}
+
 void *getsym_SystemNative(const char *name)
 {
     SYM_RESOLVE_EXISTING_NAMED("SystemNative_Socket", SystemNative_Socket_Hook);
+    SYM_RESOLVE_EXISTING_NAMED("SystemNative_Poll", SystemNative_Poll_Hook);
 
     SYM_RESOLVE(SystemNative_CreateAutoreleasePool);
     SYM_RESOLVE(SystemNative_DrainAutoreleasePool);

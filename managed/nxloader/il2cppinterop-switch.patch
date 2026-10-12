@@ -23,3 +23,41 @@ index d628ef0..ebbb6cb 100644
  
          return managedHookedMethod;
      }
+diff --git a/Il2CppInterop.Runtime/Injection/FastPath.cs b/Il2CppInterop.Runtime/Injection/FastPath.cs
+index 0615387..e69773d 100644
+--- a/Il2CppInterop.Runtime/Injection/FastPath.cs
++++ b/Il2CppInterop.Runtime/Injection/FastPath.cs
+@@ -48,8 +48,33 @@ namespace Il2CppInterop.Runtime.Injection
+             0xD503201F, // nop
+         };
+ 
++        // warpforge_nx (Switch): there is no mmap/mprotect for code and no MelonLoader bootstrap;
++        // the host builds the same stub in its own code region (wf_fastpath_install in the
++        // wrapper's warpforge_detour.c). The host turns this on with an AppContext switch.
++        [DllImport("warpforge")] private static extern nint wf_fastpath_install(nint target, nint managed, int kind);
++
++        private static bool TryApplySwitch<T>(IntPtr target, T detour, int kind, string name, Action<T> setOriginal) where T : Delegate
++        {
++            try
++            {
++                if (kind == 0) return false;
++                nint orig = wf_fastpath_install(target, Marshal.GetFunctionPointerForDelegate(detour), kind);
++                if (orig == 0) return false;
++                setOriginal(Marshal.GetDelegateForFunctionPointer<T>(orig));
++                Logger.Instance.LogInformation("{Name}: short cut in place (most calls no longer leave the game's own code)", name);
++                return true;
++            }
++            catch (Exception e)
++            {
++                Logger.Instance.LogWarning("{Name}: short cut not possible ({Error}); using the ordinary hook", name, e.Message);
++                return false;
++            }
++        }
++
+         internal static bool TryApply<T>(IntPtr target, T detour, int kind, string name, Action<T> setOriginal) where T : Delegate
+         {
++            if (AppContext.TryGetSwitch("Il2CppInterop.Switch", out var onSwitch) && onSwitch)
++                return TryApplySwitch(target, detour, kind, name, setOriginal);
+             try
+             {
+                 if (kind == 0 || RuntimeInformation.ProcessArchitecture != Architecture.Arm64) return false;

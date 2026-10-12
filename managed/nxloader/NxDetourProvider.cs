@@ -12,6 +12,7 @@ namespace WarpforgeNx
     public sealed class NxDetourProvider : IDetourProvider
     {
         [DllImport("warpforge")] static extern IntPtr wf_detour_install(IntPtr target, IntPtr replacement);
+        [DllImport("warpforge")] static extern int wf_detour_remove(IntPtr target);
 
         public IDetour Create<TDelegate>(nint original, TDelegate target) where TDelegate : Delegate
             => new NxDetour(original, target);
@@ -49,7 +50,16 @@ namespace WarpforgeNx
                 return d;
             }
 
-            public void Dispose() { /* hooks are never removed in this port */ }
+            bool _removed;
+            // Harmony disposes a method's old hook before it re-patches that method (a mod
+            // patching the same method twice). Leaving it in made the old and the new patch
+            // chain, so both ran.
+            public void Dispose()
+            {
+                if (_removed) return;
+                _removed = true;
+                wf_detour_remove(Target);
+            }
         }
     }
 }

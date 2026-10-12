@@ -86,6 +86,11 @@ void *dlshim_loadLibrary(const char *name, int flags, char **err, void *user_dat
 	 * ended up inside il2cpp's copy of SystemNative_Stat2 on a thread il2cpp
 	 * knows nothing about (null thread state + 0x135). Anything not listed
 	 * must fail, so Mono goes on to its next spelling. */
+	/* "libc": Il2CppInterop's ArgumentGuard (owner's fork) checks that an argument is
+	 * readable memory by write()-ing it into a pipe and letting the kernel refuse bad
+	 * addresses. warpforge_mono.c provides that trio with a memory-map check instead. */
+	if (!strcmp(name, "libc") || !strcmp(name, "libc.so") || !strcmp(name, "libc.so.6"))
+		return (void *)(intptr_t)0xABC00201;
 	{
 		static const char *const game_libs[] = {
 			"warpforge", "libwarpforge", "libwarpforge.so",
@@ -154,14 +159,28 @@ void *dlshim_getSymbol(void *handle, const char *name, char **err, void *user_da
 	#if defined(DLSHIM_OPENAL)
 		CHECK_LIB_SYMBOL(OpenAl)
 	#endif
+	case 0xABC00201: { /* "libc" for Il2CppInterop (see dlshim_loadLibrary) */
+		extern int wf_libc_pipe(int *fds);
+		extern long wf_libc_write(int fd, const void *buf, long n);
+		extern long wf_libc_read(int fd, void *buf, long n);
+		resolvedLibrary = "libc (warpforge)";
+		if      (!strcmp(name, "pipe"))  symbol = (void *)wf_libc_pipe;
+		else if (!strcmp(name, "write")) symbol = (void *)wf_libc_write;
+		else if (!strcmp(name, "read"))  symbol = (void *)wf_libc_read;
+		break;
+	}
 	case 0xABC00200:   /* LibHandle_GameModules */
 		resolvedLibrary = "game modules";
 		{
 			/* the wrapper's own exports for managed code come first */
 			extern void  wf_mono_log(const char *line);
 			extern void *wf_detour_install(void *target, void *replacement);
-			if      (!strcmp(name, "wf_mono_log"))       symbol = (void *)wf_mono_log;
-			else if (!strcmp(name, "wf_detour_install")) symbol = (void *)wf_detour_install;
+			extern int   wf_detour_remove(void *target);
+			extern void *wf_fastpath_install(void *target, void *managed, int kind);
+			if      (!strcmp(name, "wf_mono_log"))         symbol = (void *)wf_mono_log;
+			else if (!strcmp(name, "wf_detour_install"))   symbol = (void *)wf_detour_install;
+			else if (!strcmp(name, "wf_detour_remove"))    symbol = (void *)wf_detour_remove;
+			else if (!strcmp(name, "wf_fastpath_install")) symbol = (void *)wf_fastpath_install;
 		}
 		if (!symbol && strncmp(name, "SystemNative_", 13) && strncmp(name, "GlobalizationNative_", 20))
 			symbol = so_resolve_external(name);

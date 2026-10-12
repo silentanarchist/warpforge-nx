@@ -18,6 +18,8 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <switch.h>
@@ -200,6 +202,39 @@ void wf_mono_on_il2cpp_ready(void) {
   }
   debugPrintf("[mono] OnIl2CppReady returned %d\n", ret ? *(int *)mono_object_unbox(ret) : -1);
 }
+/* "libc" pipe/write/read for Il2CppInterop's ArgumentGuard: it only ever writes a
+ * pointer-sized value from an address that may be garbage and reads it back, to
+ * learn whether the address is readable. Same answer from the memory map. */
+#define WF_PIPE_R 0x7ff0
+#define WF_PIPE_W 0x7ff1
+static uint8_t  g_pipe_buf[64];
+static long     g_pipe_len;
+
+static int wf_readable(const void *p, long n) {
+  uintptr_t a = (uintptr_t)p, end = a + (uintptr_t)n;
+  if (!a || end < a) return 0;
+  while (a < end) {
+    MemoryInfo mi; u32 pi;
+    if (R_FAILED(svcQueryMemory(&mi, &pi, a))) return 0;
+    if (mi.type == MemType_Unmapped || !(mi.perm & Perm_R)) return 0;
+    uintptr_t next = (uintptr_t)mi.addr + mi.size;
+    if (next <= a) return 0;
+    a = next;
+  }
+  return 1;
+}
+int wf_libc_pipe(int *fds) { fds[0] = WF_PIPE_R; fds[1] = WF_PIPE_W; return 0; }
+long wf_libc_write(int fd, const void *buf, long n) {
+  if (fd != WF_PIPE_W) return write(fd, buf, (size_t)n);
+  if (n < 0 || n > (long)sizeof g_pipe_buf || !wf_readable(buf, n)) { errno = EFAULT; return -1; }
+  memcpy(g_pipe_buf, buf, (size_t)n); g_pipe_len = n; return n;
+}
+long wf_libc_read(int fd, void *buf, long n) {
+  if (fd != WF_PIPE_R) return read(fd, buf, (size_t)n);
+  long k = n < g_pipe_len ? n : g_pipe_len;
+  memcpy(buf, g_pipe_buf, (size_t)k); g_pipe_len = 0; return k;
+}
+
 /* Every frame from the render loop, after wf_hooks_tick. */
 void wf_mono_on_frame(void) {
   if (!g_loader_ready) return;
