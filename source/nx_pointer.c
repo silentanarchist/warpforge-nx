@@ -638,6 +638,23 @@ void nxp_update(void) {
     logf_("nxp: cursor recentered\n");
   }
 
+  /* L+R+ZL+ZR held together for 1.5 s: ask the watchdog for a thread dump
+   * (stall.log). For hangs where the picture keeps drawing, which the stall
+   * detector cannot see. */
+  {
+    static u64 combo_since; static int combo_fired;
+    const u64 combo = HidNpadButton_L | HidNpadButton_R | HidNpadButton_ZL | HidNpadButton_ZR;
+    if ((held & combo) == combo) {
+      if (!combo_since) combo_since = armGetSystemTick();
+      else if (!combo_fired && armGetSystemTick() - combo_since > armGetSystemTickFreq() * 3 / 2) {
+        combo_fired = 1;
+        extern void diag_request_dump(void);
+        diag_request_dump();
+        logf_("nxp: thread dump requested (L+R+ZL+ZR)\n");
+      }
+    } else { combo_since = 0; combo_fired = 0; }
+  }
+
   do_dpad(held, pressed);
 
   s_nev = 0;

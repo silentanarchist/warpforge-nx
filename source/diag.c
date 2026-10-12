@@ -305,13 +305,17 @@ static void snapshot_thread(DiagThread *t) {
   g_scan_stack = 0;
 }
 
-static void dump_threads(int episode, uint64_t now) {
+static void dump_threads(int episode, uint64_t now, int requested) {
   /* Announce entry before touching anything. dump_threads walks other threads'
    * contexts and stacks; a bad pointer there kills this thread outright, and
    * that is what happened -- stall.log held one beacon and then nothing, with no
    * stall header, so the crash was inside the dump rather than the detector. */
   stallPrintf("[wd] dump_threads: entered\n");
   uint64_t stalled_ns = tick_to_ns(now - g_last_progress);
+  if (requested)
+    stallPrintf("\n[wd] ===== REQUESTED DUMP #%d (L+R+ZL+ZR held; frames still drawing, frame=%d) =====\n",
+                episode, g_frame);
+  else
   stallPrintf("\n[wd] ===== STALL #%d : no frame progress for %llu.%llus (last frame=%d) =====\n",
               episode, (unsigned long long)(stalled_ns / 1000000000ull),
               (unsigned long long)((stalled_ns % 1000000000ull) / 100000000ull), g_frame);
@@ -350,6 +354,12 @@ static void dump_threads(int episode, uint64_t now) {
   stallPrintf("\n");
 }
 
+/* A dump the player asks for: a game that hangs at a loading step while still
+ * drawing frames never trips the stall detector, so there was nothing to read.
+ * Holding L+R+ZL+ZR together for 1.5 s (nx_pointer.c) sets this. */
+static volatile int g_dump_requested;
+void diag_request_dump(void) { g_dump_requested = 1; }
+
 static void watchdog_main(void *unused) {
   (void)unused;
   /* Own bionic TLS block. Every other thread that can reach engine-adjacent code
@@ -381,9 +391,14 @@ static void watchdog_main(void *unused) {
       }
     }
 
+    if (g_dump_requested) {
+      g_dump_requested = 0;
+      debug_log_flush();            /* so debug.log shows how far the game got */
+      dump_threads(++episode, now, 1);
+    }
     if (tick_to_ns(idle) >= DIAG_STALL_NS) {
       if (last_dump == 0 || tick_to_ns(now - last_dump) >= DIAG_REDUMP_NS) {
-        dump_threads(++episode, now);
+        dump_threads(++episode, now, 0);
         last_dump = now;
       }
     } else {
