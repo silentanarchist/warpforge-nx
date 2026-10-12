@@ -42,6 +42,18 @@ void heap_debug(void) {
               (unsigned)((g_mono_hi - g_mono_lo) >> 20));
 }
 
+/* Mono's heap slice: what the GC reports in use / grown to, and the slice size. */
+void wf_mono_heap_stats(unsigned *used_mb, unsigned *heap_mb, unsigned *slice_mb) {
+  extern int64_t mono_gc_get_used_size(void);
+  extern int64_t mono_gc_get_heap_size(void);
+  *used_mb = *heap_mb = 0;
+  if (g_mono_hi > g_mono_lo) {
+    *used_mb = (unsigned)(mono_gc_get_used_size() >> 20);
+    *heap_mb = (unsigned)(mono_gc_get_heap_size() >> 20);
+  }
+  *slice_mb = (unsigned)((g_mono_hi - g_mono_lo) >> 20);
+}
+
 void wf_mono_heap_init(uintptr_t lo, uintptr_t hi) {
   g_mono_lo = (intptr_t)lo;
   g_mono_hi = (intptr_t)hi;

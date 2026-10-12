@@ -362,11 +362,19 @@ int cp_boot_and_run(void) {
         extern void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb);
         if (++n % 15 == 1 || cp_gpua_peak_mb() != last_peak) {
           last_peak = cp_gpua_peak_mb();
+          extern void mmap_arena_stats(unsigned *, unsigned *, unsigned *, unsigned *);
           unsigned ocu = 0, occ = 0; oc_pool_stats(&ocu, &occ);
+          unsigned mar = 0, mac = 0, map = 0, macap = 0; mmap_arena_stats(&mar, &mac, &map, &macap);
+          unsigned monou = 0, monoh = 0, monos = 0;
+#if WF_MONO
+          extern void wf_mono_heap_stats(unsigned *, unsigned *, unsigned *);
+          wf_mono_heap_stats(&monou, &monoh, &monos);
+#endif
           struct mallinfo mi = mallinfo();
-          debugPrintf("[mem] gpu arena live=%u MB peak=%u MB | oc pool %u/%u MB | newlib: in use %u MB, free %u MB\n",
-                      cp_gpua_live_mb(), cp_gpua_peak_mb(), ocu, occ,
-                      (unsigned)(mi.uordblks >> 20), (unsigned)(mi.fordblks >> 20));
+          debugPrintf("[mem] gpu arena %u MB (peak %u/512) | oc pool %u/%u MB | mmap arena %u reserved, %u committed (peak %u/%u) | "
+                      "mono %u used, %u heap of %u | newlib %u MB in use of %u\n",
+                      cp_gpua_live_mb(), cp_gpua_peak_mb(), ocu, occ, mar, mac, map, macap, monou, monoh, monos,
+                      (unsigned)(mi.uordblks >> 20), (unsigned)(mi.arena >> 20));
         }
       }
       frames = 0;

@@ -1131,6 +1131,17 @@ int oc_arena_init(void *window, size_t window_bytes, void *pool, size_t pool_byt
   return 1;
 }
 
+/* mmap arena (the heap-backed spill): reserved pages and, with overcommit,
+ * physically committed pages. */
+void mmap_arena_stats(unsigned *reserved_mb, unsigned *committed_mb, unsigned *peak_mb, unsigned *cap_mb) {
+  size_t used = 0;
+  if (mmap_used) for (size_t i = 0; i < mmap_pages; i++) used += mmap_used[i];
+  *reserved_mb  = (unsigned)((used * MMAP_PAGE) >> 20);
+  *committed_mb = (unsigned)((g_committed_pages * MMAP_PAGE) >> 20);
+  *peak_mb      = (unsigned)((g_commit_peak * MMAP_PAGE) >> 20);
+  *cap_mb       = (unsigned)(mmap_usable >> 20);
+}
+
 void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb) {
   *used_mb = (unsigned)((oc_pool_used * MMAP_PAGE) >> 20);
   *cap_mb  = (unsigned)((oc_pool_total * MMAP_PAGE) >> 20);
