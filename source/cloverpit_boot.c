@@ -356,6 +356,9 @@ int cp_boot_and_run(void) {
                     frames * 1e9 / (double)(t - last_log),
                     cp_time_now(), cp_time_delta(), cp_time_frames());
       }
+#if WF_MONO
+      { extern void wf_gc_check_stuck(void); wf_gc_check_stuck(); }
+#endif
       /* memory budget, every 30 s (or when the GPU arena's peak moved) */
       {
         static unsigned n, last_peak;

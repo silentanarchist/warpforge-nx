@@ -2244,6 +2244,40 @@ static uintptr_t gc_thread_rec(uintptr_t b, pthread_t t) {
       if (*(pthread_t *)(p + GCT_ID) == t) return p;
   return 0;
 }
+/* Threads paused by the bridge and not yet resumed, with the time they were
+ * paused: a collection takes well under a second, so anything still here after
+ * a few seconds was missed by the restart and would stay paused forever (a
+ * loading thread that never comes back looks like a game that hangs at a
+ * loading step with frames still being drawn). wf_gc_check_stuck resumes it. */
+#define GC_PAUSED_MAX 64
+static struct { Handle h; u64 since; } g_gc_paused[GC_PAUSED_MAX];
+static Mutex g_gc_paused_lock;
+static void gc_paused_add(Handle h) {
+  mutexLock(&g_gc_paused_lock);
+  for (int i = 0; i < GC_PAUSED_MAX; i++) if (g_gc_paused[i].h == h) { g_gc_paused[i].since = armGetSystemTick(); mutexUnlock(&g_gc_paused_lock); return; }
+  for (int i = 0; i < GC_PAUSED_MAX; i++) if (!g_gc_paused[i].h) { g_gc_paused[i].h = h; g_gc_paused[i].since = armGetSystemTick(); break; }
+  mutexUnlock(&g_gc_paused_lock);
+}
+static void gc_paused_remove(Handle h) {
+  mutexLock(&g_gc_paused_lock);
+  for (int i = 0; i < GC_PAUSED_MAX; i++) if (g_gc_paused[i].h == h) g_gc_paused[i].h = 0;
+  mutexUnlock(&g_gc_paused_lock);
+}
+void wf_gc_check_stuck(void) {
+  u64 now = armGetSystemTick(), limit = armGetSystemTickFreq() * 3;
+  mutexLock(&g_gc_paused_lock);
+  for (int i = 0; i < GC_PAUSED_MAX; i++) {
+    if (g_gc_paused[i].h && now - g_gc_paused[i].since > limit) {
+      Handle h = g_gc_paused[i].h; g_gc_paused[i].h = 0;
+      mutexUnlock(&g_gc_paused_lock);
+      Result rc = svcSetThreadActivity(h, ThreadActivity_Runnable);
+      debugPrintf("[gc] thread handle 0x%x was left paused for over 3 s -- resumed (0x%x)\n", h, rc);
+      mutexLock(&g_gc_paused_lock);
+    }
+  }
+  mutexUnlock(&g_gc_paused_lock);
+}
+
 static int g_gc_pause_disabled;    /* set once if pausing ever fails outright */
 static unsigned g_gc_pauses, g_gc_pause_misses, g_gc_misses_logged;
 static int gc_pause_thread(uintptr_t b, pthread_t t) {
@@ -2277,6 +2311,7 @@ static int gc_pause_thread(uintptr_t b, pthread_t t) {
       *(uintptr_t *)(rec + GCT_STACK_PTR) = lo;
       *(uintptr_t *)(rec + GCT_LAST_STOP) = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF);
     }
+    gc_paused_add(h);
     return 0;
   }
   return -1;
@@ -2286,6 +2321,7 @@ static void gc_resume_thread(uintptr_t b, pthread_t t) {
   if (h == INVALID_HANDLE) return;
   uintptr_t rec = gc_thread_rec(b, t);
   if (rec) *(uintptr_t *)(rec + GCT_LAST_STOP) = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF) | 1;
+  gc_paused_remove(h);
   svcSetThreadActivity(h, ThreadActivity_Runnable);
 }
 
