@@ -16,11 +16,11 @@ using System.Threading.Tasks;
 namespace MelonLoader.Switch
 {
     /// <summary>One TLS connection made by the wrapper (blocking reads and writes).</summary>
-    public sealed unsafe class NxTlsStream : Stream
+    public sealed class NxTlsStream : Stream
     {
-        [DllImport("warpforge")] static extern IntPtr wf_tls_connect(string host, int port, int timeoutMs, byte* err, int errLen);
-        [DllImport("warpforge")] static extern int wf_tls_read(IntPtr h, byte* buf, int len);
-        [DllImport("warpforge")] static extern int wf_tls_write(IntPtr h, byte* buf, int len);
+        [DllImport("warpforge")] static extern unsafe IntPtr wf_tls_connect(string host, int port, int timeoutMs, byte* err, int errLen);
+        [DllImport("warpforge")] static extern unsafe int wf_tls_read(IntPtr h, byte* buf, int len);
+        [DllImport("warpforge")] static extern unsafe int wf_tls_write(IntPtr h, byte* buf, int len);
         [DllImport("warpforge")] static extern void wf_tls_close(IntPtr h);
         [DllImport("warpforge")] static extern void wf_tls_abort(IntPtr h);
 
@@ -29,7 +29,7 @@ namespace MelonLoader.Switch
 
         NxTlsStream(IntPtr h) { _h = h; }
 
-        public static NxTlsStream Connect(string host, int port, int timeoutMs = 20000)
+        public static unsafe NxTlsStream Connect(string host, int port, int timeoutMs = 20000)
         {
             byte* err = stackalloc byte[512];
             err[0] = 0;
@@ -43,7 +43,7 @@ namespace MelonLoader.Switch
             => Task.Run<Stream>(() => Connect(host, port), ct);
 
         public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
-        public override int Read(Span<byte> buffer)
+        public override unsafe int Read(Span<byte> buffer)
         {
             if (buffer.Length == 0) return 0;
             var h = _h;
@@ -55,7 +55,7 @@ namespace MelonLoader.Switch
         }
 
         public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
-        public override void Write(ReadOnlySpan<byte> buffer)
+        public override unsafe void Write(ReadOnlySpan<byte> buffer)
         {
             if (buffer.Length == 0) return;
             var h = _h;
