@@ -40,14 +40,9 @@ jobs:
       # The image ships the whole switch-portlibs group (mesa, libdrm_nouveau, SDL2, zlib,
       # libpng, ffmpeg). devkitPro bans CI runners from its package server, so nothing is
       # installed here; whatever the Makefile needs must already be in the image.
-      - name: Build (game only)
-        run: |
-          export DEVKITPRO=/opt/devkitpro
-          make -j"$(nproc)"
-          ls -la *.nro
-
-      # Mod milestone 1: a second .nro with the Mono runtime linked in. The
-      # prebuilt mono-nx SDK (exelix11/mono-nx, release rel-3) is fetched here;
+      # The Mono runtime (mod milestone 1) is linked into the one and only .nro; it
+      # starts only when /mono is on the card, otherwise the game boots without it.
+      # The prebuilt mono-nx SDK (exelix11/mono-nx, release rel-3) is fetched here;
       # devkitPro's package server is not involved.
       - name: Fetch the mono-nx SDK
         run: |
@@ -57,14 +52,10 @@ jobs:
           unzip -q sdk.zip && rm sdk.zip
           ls
 
-      - name: Build (with Mono)
+      - name: Build
         run: |
           export DEVKITPRO=/opt/devkitpro
-          mv warpforge_nx.nro warpforge_nx.game.nro
-          make clean
           make -j"$(nproc)" WF_MONO=1
-          mv warpforge_nx.nro warpforge_nx_mono.nro
-          mv warpforge_nx.game.nro warpforge_nx.nro
           ls -la *.nro
 
       - uses: actions/download-artifact@v4
@@ -103,7 +94,7 @@ jobs:
           tag_name: test
           name: "Test build (latest main)"
           prerelease: true
-          body: "Rolling build of the latest commit on main (${{ github.sha }}). warpforge_nx.nro = game only; warpforge_nx_mono.nro = with the Mono runtime (needs mono_sd.zip unpacked to the SD root and mono_hello.dll in the game folder)."
+          body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime is linked in and starts only when mono_sd.zip is unpacked to the SD root; mono_hello.dll goes in the game folder."
           files: |
             *.nro
             mono_hello.dll
