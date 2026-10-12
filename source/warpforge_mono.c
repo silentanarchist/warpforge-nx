@@ -45,7 +45,8 @@ void wf_mono_heap_init(uintptr_t lo, uintptr_t hi) {
   mono_nx_fakemmap_init(g_mono_lo, g_mono_hi);
 }
 
-static MonoDomain *g_domain;
+static MonoDomain   *g_domain;
+static MonoAssembly *g_hello;      /* mono_hello.dll, kept for the il2cpp-ready call */
 
 /* Managed code logs through this (DllImport("warpforge")). */
 void wf_mono_log(const char *line) { debugPrintf("[managed] %s\n", line ? line : "(null)"); }
@@ -85,13 +86,36 @@ int wf_mono_run_hello(void) {
     debugPrintf("[mono] could not open %s\n", path);
     return -1;
   }
+  g_hello = as;
   char *argv[] = { path };
   int rc = mono_jit_exec(g_domain, as, 1, argv);
   debugPrintf("[mono] %s returned %d\n", WF_MONO_HELLO, rc);
   return rc;
 }
+
+/* MILESTONE 2: called by warpforge_hooks.c on the first frame after il2cpp_init,
+ * on the engine main thread. Invokes WarpforgeNx.Il2CppProbe.OnIl2CppReady()
+ * in mono_hello.dll, which walks the game's IL2CPP domain through the il2cpp
+ * C API (DllImport("il2cpp") -> libil2cpp.so via the dlopen shim). */
+void wf_mono_on_il2cpp_ready(void) {
+  if (!g_domain || !g_hello) return;
+  MonoImage *img = mono_assembly_get_image(g_hello);
+  MonoClass *k = mono_class_from_name(img, "WarpforgeNx", "Il2CppProbe");
+  if (!k) { debugPrintf("[mono] WarpforgeNx.Il2CppProbe not in %s\n", WF_MONO_HELLO); return; }
+  MonoMethod *m = mono_class_get_method_from_name(k, "OnIl2CppReady", 0);
+  if (!m) { debugPrintf("[mono] Il2CppProbe.OnIl2CppReady not found\n"); return; }
+  debugPrintf("[mono] il2cpp is up -- calling Il2CppProbe.OnIl2CppReady()\n");
+  MonoObject *exc = NULL;
+  MonoObject *ret = mono_runtime_invoke(m, NULL, NULL, &exc);
+  if (exc) {
+    debugPrintf("[mono] OnIl2CppReady threw %s\n", mono_class_get_name(mono_object_get_class(exc)));
+    return;
+  }
+  debugPrintf("[mono] OnIl2CppReady returned %d\n", ret ? *(int *)mono_object_unbox(ret) : -1);
+}
 #else
 void wf_mono_heap_init(uintptr_t lo, uintptr_t hi) { (void)lo; (void)hi; }
 int  wf_mono_start(void)     { return -1; }
 int  wf_mono_run_hello(void) { return -1; }
+void wf_mono_on_il2cpp_ready(void) {}
 #endif

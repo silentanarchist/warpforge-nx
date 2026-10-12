@@ -30,4 +30,8 @@ void wf_hooks_tick(void) {
   debugPrintf("[hooks] il2cpp domain is up -- installing managed hooks by name\n");
   cp_time_install(NULL);
   cp_touchhook_install(NULL);
+  /* Mod milestone 2: managed code (Mono) calling the IL2CPP C API by name.
+   * After our own hooks, so the probe sees the same hooked Time getters. */
+  extern void wf_mono_on_il2cpp_ready(void);
+  wf_mono_on_il2cpp_ready();
 }

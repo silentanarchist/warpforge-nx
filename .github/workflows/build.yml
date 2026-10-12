@@ -95,7 +95,7 @@ jobs:
           tag_name: test
           name: "Test build (latest main)"
           prerelease: true
-          body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime is linked in and starts only when mono_sd.zip is unpacked to the SD root; mono_hello.dll goes in the game folder."
+          body: "Rolling build of the latest commit on main (${{ github.sha }}). The Mono runtime (and the il2cpp probe in mono_hello.dll) is linked in and starts only when mono_sd.zip is unpacked to the SD root; mono_hello.dll goes in the game folder."
           files: |
             *.nro
             *.elf
