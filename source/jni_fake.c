@@ -806,6 +806,7 @@ static void *dispatch_object(void *recv, const FakeID *id, va_list va) {
   { void *t = wf_tls_object(recv, id); if (t) return t; }
   { extern int wf_motion_is_event(const void *, const char *);
     if (wf_motion_is_event(recv, id->cls)) {
+      static unsigned traced; if (traced < 10) { traced++; debugPrintf("[motion]   engine asks object %s\n", id->name); }
       if (!strcmp(id->name, "getDevice")) { extern void *cloverpit_input_device_handle(void); return cloverpit_input_device_handle(); }
       return NULL;
     } }

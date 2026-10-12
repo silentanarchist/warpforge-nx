@@ -64,7 +64,15 @@ int wf_motion_is_event(const void *recv, const char *cls) {
 
 static int idx_arg(va_list va) { int i = va_arg(va, int); return (i >= 0 && i < g_ev.count) ? i : 0; }
 
+/* The first questions the engine asks an injected event, so a rejected touch can
+ * be traced to the one it failed. */
+static unsigned g_traced;
+static void trace_call(const char *kind, const char *name) {
+  if (g_traced < 40) { g_traced++; debugPrintf("[motion]   engine asks %s %s\n", kind, name); }
+}
+
 uint64_t wf_motion_int(const char *name, va_list va) {
+  trace_call("int", name);
   if (!strcmp(name, "getActionMasked"))  return (uint64_t)g_ev.action;
   if (!strcmp(name, "getAction"))        return (uint64_t)g_ev.action;        /* index 0 -> no high bits */
   if (!strcmp(name, "getActionIndex"))   return 0;
@@ -81,6 +89,7 @@ uint64_t wf_motion_int(const char *name, va_list va) {
 }
 
 float wf_motion_float(const char *name, va_list va) {
+  trace_call("float", name);
   if (!strcmp(name, "getX") || !strcmp(name, "getRawX")) return g_ev.x[idx_arg(va)];
   if (!strcmp(name, "getY") || !strcmp(name, "getRawY")) return g_ev.y[idx_arg(va)];
   if (!strcmp(name, "getPressure")) return g_ev.action == 1 ? 0.0f : 1.0f;
