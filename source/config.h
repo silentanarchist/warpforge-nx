@@ -387,7 +387,7 @@
  * opensles_movie_begin() now picks whichever device is actually open and marks
  * it as the ring's sole drain, so there is nothing left to configure. */
 
-#define DEBUG_LOG 0
+#define DEBUG_LOG 1   /* warpforge: ON while bringing the port up */
 
 /* Per-call file/mmap tracing. Each traced line is a log write, and log writes go
  * to the SD card, so this is not free: the first loading-screen hang was the
