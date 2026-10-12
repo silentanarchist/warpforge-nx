@@ -33,6 +33,16 @@
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/error.h>
+/* the net_sockets module's error codes (its header is not always installed) */
+#ifndef MBEDTLS_ERR_NET_SEND_FAILED
+#define MBEDTLS_ERR_NET_SEND_FAILED  -0x004E
+#endif
+#ifndef MBEDTLS_ERR_NET_RECV_FAILED
+#define MBEDTLS_ERR_NET_RECV_FAILED  -0x004C
+#endif
+#ifndef MBEDTLS_ERR_NET_CONN_RESET
+#define MBEDTLS_ERR_NET_CONN_RESET   -0x0050
+#endif
 #include "util.h"
 #include "warpforge_cacerts.h"
 
