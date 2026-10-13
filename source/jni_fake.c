@@ -60,19 +60,72 @@ volatile int jni_quit_requested = 0;
 // local reference registry (matches the engine's Push/PopLocalFrame brackets)
 // ---------------------------------------------------------------------------
 
-#define MAX_LOCALS 1048576
+/* PER THREAD. Java's local references belong to the thread that made them, and
+ * so do Push/PopLocalFrame. This table used to be one for the whole process:
+ * thread A's PopLocalFrame freed every local made since A's PushLocalFrame --
+ * including the byte[] another thread had just made for a web request -- and
+ * that thread then read a freed array (GetByteArrayElements -> NULL) and
+ * crashed copying the request URL into it (libunity+0x8f17e4, loading in, one
+ * run in a few: the Unity analytics upload races the main thread's frames).
+ * Each thread now has its own table and frame stack; all tables are listed so a
+ * NewGlobalRef/DeleteLocalRef of a reference made on another thread still finds
+ * it. One lock for all of them: these calls are short and rare enough. */
 #define MAX_FRAMES 64
-static void *locals[MAX_LOCALS];
-static int locals_top = 0;
-static int frames[MAX_FRAMES];
-static int frame_top = 0;
+typedef struct JniLocals {
+  void **v; int top, cap;
+  int frames[MAX_FRAMES]; int frame_top;
+  struct JniLocals *next;
+} JniLocals;
+static JniLocals *g_all_locals;
+static __thread JniLocals *t_locals;
 static Mutex locals_lock;
+#define MAX_LOCALS_PER_THREAD 1048576
+
+/* caller holds locals_lock */
+static JniLocals *my_locals(void) {
+  JniLocals *l = t_locals;
+  if (!l) {
+    l = calloc(1, sizeof *l);
+    l->next = g_all_locals; g_all_locals = l;
+    t_locals = l;
+  }
+  return l;
+}
+static void locals_push(JniLocals *l, void *ref) {
+  if (l->top == l->cap) {
+    if (l->cap >= MAX_LOCALS_PER_THREAD) return;
+    int nc = l->cap ? l->cap * 2 : 256;
+    void **nv = realloc(l->v, (size_t)nc * sizeof *nv);
+    if (!nv) return;
+    l->v = nv; l->cap = nc;
+  }
+  l->v[l->top++] = ref;
+}
+/* remove ref from whichever thread's table holds it (own first); 1 if found.
+ * Order is kept (memmove), so a removal never moves another reference across a
+ * frame mark. caller holds locals_lock */
+static int locals_remove_from(JniLocals *l, void *ref) {
+  for (int i = l->top - 1; i >= 0; i--)
+    if (l->v[i] == ref) {
+      memmove(&l->v[i], &l->v[i + 1], (size_t)(l->top - i - 1) * sizeof *l->v);
+      l->top--;
+      for (int f = 0; f < l->frame_top; f++) if (l->frames[f] > i) l->frames[f]--;
+      return 1;
+    }
+  return 0;
+}
+static int locals_remove(void *ref) {
+  JniLocals *own = my_locals();
+  if (locals_remove_from(own, ref)) return 1;
+  for (JniLocals *l = g_all_locals; l; l = l->next)
+    if (l != own && locals_remove_from(l, ref)) return 1;
+  return 0;
+}
 
 static void *reg_local(void *ref) {
   if (ref) {
     mutexLock(&locals_lock);
-    if (locals_top < MAX_LOCALS)
-      locals[locals_top++] = ref;
+    locals_push(my_locals(), ref);
     mutexUnlock(&locals_lock);
   }
   return ref;
@@ -105,13 +158,7 @@ static void delete_local(void *ref) {
   if (!ref)
     return;
   mutexLock(&locals_lock);
-  for (int i = locals_top - 1; i >= 0; i--) {
-    if (locals[i] == ref) {
-      locals[i] = locals[--locals_top];
-      free_ref(ref);
-      break;
-    }
-  }
+  if (locals_remove(ref)) free_ref(ref);
   mutexUnlock(&locals_lock);
 }
 
@@ -972,8 +1019,7 @@ static void *j_NewObjectV(void *env, void *cls, void *mid, va_list va) {
 static void *j_NewGlobalRef(void *env, void *obj) {
   (void)env;
   mutexLock(&locals_lock);
-  for (int i = locals_top - 1; i >= 0; i--)
-    if (locals[i] == obj) { locals[i] = locals[--locals_top]; break; }
+  locals_remove(obj);
   mutexUnlock(&locals_lock);
   return obj;
 }
@@ -1009,21 +1055,28 @@ static juint j_EnsureLocalCapacity(void *env, int cap) { (void)env; (void)cap; r
 static juint j_PushLocalFrame(void *env, int cap) {
   (void)env; (void)cap;
   mutexLock(&locals_lock);
-  if (frame_top < MAX_FRAMES)
-    frames[frame_top++] = locals_top;
+  JniLocals *l = my_locals();
+  if (l->frame_top < MAX_FRAMES)
+    l->frames[l->frame_top++] = l->top;
   mutexUnlock(&locals_lock);
   return 0;
 }
 static void *j_PopLocalFrame(void *env, void *result) {
   (void)env;
   mutexLock(&locals_lock);
-  const int mark = frame_top > 0 ? frames[--frame_top] : 0;
-  for (int i = mark; i < locals_top; i++)
-    if (locals[i] != result)
-      free_ref(locals[i]);
-  locals_top = mark;
-  if (result && locals_top < MAX_LOCALS)
-    locals[locals_top++] = result;
+  JniLocals *l = my_locals();
+  /* a Pop without a Push on this thread frees nothing (it used to free the
+   * whole table, everyone's) */
+  if (l->frame_top > 0) {
+    const int mark = l->frames[--l->frame_top];
+    int keep = 0;
+    for (int i = mark; i < l->top; i++) {
+      if (l->v[i] == result) keep = 1;
+      else free_ref(l->v[i]);
+    }
+    l->top = mark;
+    if (result && keep) locals_push(l, result);
+  }
   mutexUnlock(&locals_lock);
   return result;
 }
