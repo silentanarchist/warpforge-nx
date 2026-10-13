@@ -1295,17 +1295,33 @@ static void oc_commit_locked(void *addr, size_t len) {
     size_t run = 0;
     while (i + run < cnt && !oc_committed[first + i + run]) run++;
     if (oc_pool_bump >= oc_pool_pages) {
+      /* 64 MB first; when the heap has no run that long (it is ~95% full in
+       * battle, and fragmented), smaller chunks down to 1 MB, and as a last
+       * resort the GPU arena's free pages (through the wrapped memalign). The
+       * crash at 18:29 needed 1.7 MB with 120 MB free in the heap and no 64 MB
+       * run left. */
       extern void *__real_memalign(size_t, size_t);
-      uint8_t *chunk = __real_memalign(MMAP_PAGE, OC_GROW_BYTES);
+      size_t sz = OC_GROW_BYTES; uint8_t *chunk = NULL; int from_arena = 0;
+      for (; sz >= ((size_t)1 << 20); sz >>= 1) {
+        if ((chunk = __real_memalign(MMAP_PAGE, sz))) break;
+      }
       if (!chunk) {
-        debugPrintf("[oc] commit-pool EXHAUSTED and the heap has no %u MB chunk left: need %zu pages (live %zu MB)\n",
-                    (unsigned)(OC_GROW_BYTES >> 20), run, (oc_live_pages * MMAP_PAGE) >> 20);
+        for (sz = (size_t)16 << 20; sz >= ((size_t)1 << 20); sz >>= 1) {
+          if ((chunk = memalign(MMAP_PAGE, sz))) { from_arena = 1; break; }
+        }
+      }
+      if (!chunk) {
+        debugPrintf("[oc] commit-pool EXHAUSTED: no chunk of even %zu KB left in the heap or the GPU arena (live %zu MB)\n",
+                    (run * MMAP_PAGE) >> 10, (oc_live_pages * MMAP_PAGE) >> 20);
         return;   // can't back; touching it would fault
       }
-      oc_pool = chunk; oc_pool_pages = OC_GROW_BYTES / MMAP_PAGE; oc_pool_bump = 0;
+      oc_pool = chunk; oc_pool_pages = sz / MMAP_PAGE; oc_pool_bump = 0;
       oc_pool_total += oc_pool_pages;
-      debugPrintf("[oc] commit-pool grew by %u MB (now %zu MB, %zu MB used)\n",
-                  (unsigned)(OC_GROW_BYTES >> 20), (oc_pool_total * MMAP_PAGE) >> 20, (oc_pool_used * MMAP_PAGE) >> 20);
+      static unsigned grew_logged;
+      if (sz == OC_GROW_BYTES || grew_logged++ < 20)
+        debugPrintf("[oc] commit-pool grew by %u MB%s (now %zu MB, %zu MB used)\n",
+                    (unsigned)(sz >> 20), from_arena ? " (from the GPU arena / wrapped heap)" : "",
+                    (oc_pool_total * MMAP_PAGE) >> 20, (oc_pool_used * MMAP_PAGE) >> 20);
     }
     if (run > oc_pool_pages - oc_pool_bump) run = oc_pool_pages - oc_pool_bump;   // the rest next round
     void *dst = oc_base + (first + i) * MMAP_PAGE;
