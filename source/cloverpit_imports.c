@@ -25,6 +25,10 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "so_util.h"
 #include "util.h"
 
@@ -70,20 +74,87 @@ static int64_t stub_neg1_64(void) { return -1; }
 /* Which videos does the game try to play, and when? (the end-of-round win/loss
  * animation does not show; on the phone it plays -- probably a VideoPlayer) */
 static unsigned g_media_logged;
+/* The extractor itself is a dummy: Unity only checks it is non-NULL, then hands
+ * over the clip (setDataSourceFd / setDataSourceCustom). Each clip is copied once
+ * to <root>/videos/clip-<length>-<offset>.mp4 -- so stills can be made from the
+ * win/loss clips, which live in the downloaded bundles -- and then refused as
+ * before, so playback still fails cleanly. */
+static uint32_t g_dummy_extractor[4];
 static void *log_extractor_new(void) {
   if (g_media_logged < 30) { g_media_logged++;
-    debugPrintf("[video] the engine opened a video (AMediaExtractor_new) -- no decoder here, it stays blank\n"); }
-  return NULL;
+    debugPrintf("[video] the engine opened a video (AMediaExtractor_new)\n"); }
+  return g_dummy_extractor;
 }
-static int log_set_source_fd(void *ex, int fd, int64_t off, int64_t len) {
+static void clip_path(char *out, size_t n, long long len, long long off) {
+  extern const char *cp_game_root(void);
+  char dir[300]; snprintf(dir, sizeof dir, "%s/videos", cp_game_root());
+  mkdir(dir, 0777);
+  snprintf(out, n, "%s/clip-%lld-%lld.mp4", dir, len, off);
+}
+static int set_source_fd(void *ex, int fd, int64_t off, int64_t len) {
   (void)ex;
-  if (g_media_logged < 30) { g_media_logged++;
-    debugPrintf("[video] video source fd=%d offset=%lld length=%lld\n", fd, (long long)off, (long long)len); }
+  char path[400]; clip_path(path, sizeof path, (long long)len, (long long)off);
+  struct stat st;
+  if (len > 0 && len < (256ll << 20) && stat(path, &st) != 0) {
+    FILE *o = fopen(path, "wb");
+    long long done = 0;
+    if (o) {
+      static char buf[65536];
+      off_t keep = lseek(fd, 0, SEEK_CUR);
+      if (lseek(fd, (off_t)off, SEEK_SET) >= 0) {
+        while (done < len) {
+          long want = (long)(len - done > (long long)sizeof buf ? (long long)sizeof buf : len - done);
+          long r = read(fd, buf, (size_t)want);
+          if (r <= 0) break;
+          fwrite(buf, 1, (size_t)r, o); done += r;
+        }
+      }
+      if (keep >= 0) lseek(fd, keep, SEEK_SET);
+      fclose(o);
+    }
+    debugPrintf("[video] clip saved: %s (%lld of %lld bytes)\n", path, done, (long long)len);
+  } else if (g_media_logged < 30) { g_media_logged++;
+    debugPrintf("[video] clip fd=%d offset=%lld length=%lld (already saved as %s)\n", fd, (long long)off, (long long)len, path); }
+  return AMEDIA_ERROR_UNSUPPORTED;
+}
+/* AMediaDataSource: Unity's callbacks for clips it streams itself. */
+typedef int64_t (*ds_readat_fn)(void *ud, int64_t off, void *buf, size_t size);
+typedef int64_t (*ds_getsize_fn)(void *ud);
+typedef struct { void *ud; ds_readat_fn readat; ds_getsize_fn getsize; } fake_ds;
+static void *ds_new(void) { return calloc(1, sizeof(fake_ds)); }
+static void ds_delete(void *d) { free(d); }
+static void ds_set_ud(void *d, void *ud) { if (d) ((fake_ds *)d)->ud = ud; }
+static void ds_set_readat(void *d, void *f) { if (d) ((fake_ds *)d)->readat = (ds_readat_fn)f; }
+static void ds_set_getsize(void *d, void *f) { if (d) ((fake_ds *)d)->getsize = (ds_getsize_fn)f; }
+static int set_source_custom(void *ex, void *d) {
+  (void)ex;
+  fake_ds *ds = d;
+  if (!ds || !ds->readat || !ds->getsize) { debugPrintf("[video] custom clip source without callbacks\n"); return AMEDIA_ERROR_UNSUPPORTED; }
+  int64_t len = ds->getsize(ds->ud);
+  static unsigned n_custom;
+  char path[400]; clip_path(path, sizeof path, (long long)len, (long long)(1000000 + n_custom++));
+  if (len > 0 && len < (256ll << 20)) {
+    FILE *o = fopen(path, "wb");
+    long long done = 0;
+    if (o) {
+      static char buf[65536];
+      while (done < len) {
+        size_t want = (size_t)(len - done > (int64_t)sizeof buf ? (int64_t)sizeof buf : len - done);
+        int64_t r = ds->readat(ds->ud, done, buf, want);
+        if (r <= 0) break;
+        fwrite(buf, 1, (size_t)r, o); done += r;
+      }
+      fclose(o);
+    }
+    debugPrintf("[video] clip saved (custom source): %s (%lld of %lld bytes)\n", path, done, (long long)len);
+  } else debugPrintf("[video] custom clip source of %lld bytes -- not saved\n", (long long)len);
   return AMEDIA_ERROR_UNSUPPORTED;
 }
 static int log_set_source(void *ex, const char *loc) {
   (void)ex;
   if (g_media_logged < 30) { g_media_logged++; debugPrintf("[video] video source %s\n", loc ? loc : "(null)"); }
+  return AMEDIA_ERROR_UNSUPPORTED;
+}
   return AMEDIA_ERROR_UNSUPPORTED;
 }
 
@@ -131,12 +202,12 @@ DynLibFunction cloverpit_imports[] = {
   { "AMediaCodec_setOutputSurface", (uintptr_t)&stub_media_err },
   { "AMediaCodec_start", (uintptr_t)&stub_media_err },
   { "AMediaCodec_stop", (uintptr_t)&stub_media_err },
-  { "AMediaDataSource_delete", (uintptr_t)&stub_void },
-  { "AMediaDataSource_new", (uintptr_t)&stub_null },
+  { "AMediaDataSource_delete", (uintptr_t)&ds_delete },
+  { "AMediaDataSource_new", (uintptr_t)&ds_new },
   { "AMediaDataSource_setClose", (uintptr_t)&stub_void },
-  { "AMediaDataSource_setGetSize", (uintptr_t)&stub_void },
-  { "AMediaDataSource_setReadAt", (uintptr_t)&stub_void },
-  { "AMediaDataSource_setUserdata", (uintptr_t)&stub_void },
+  { "AMediaDataSource_setGetSize", (uintptr_t)&ds_set_getsize },
+  { "AMediaDataSource_setReadAt", (uintptr_t)&ds_set_readat },
+  { "AMediaDataSource_setUserdata", (uintptr_t)&ds_set_ud },
   { "AMediaExtractor_advance", (uintptr_t)&stub_zero },
   { "AMediaExtractor_delete", (uintptr_t)&stub_void },
   { "AMediaExtractor_getSampleTime", (uintptr_t)&stub_neg1_64 },
@@ -148,8 +219,8 @@ DynLibFunction cloverpit_imports[] = {
   { "AMediaExtractor_seekTo", (uintptr_t)&stub_media_err },
   { "AMediaExtractor_selectTrack", (uintptr_t)&stub_media_err },
   { "AMediaExtractor_setDataSource", (uintptr_t)&log_set_source },
-  { "AMediaExtractor_setDataSourceCustom", (uintptr_t)&stub_media_err },
-  { "AMediaExtractor_setDataSourceFd", (uintptr_t)&log_set_source_fd },
+  { "AMediaExtractor_setDataSourceCustom", (uintptr_t)&set_source_custom },
+  { "AMediaExtractor_setDataSourceFd", (uintptr_t)&set_source_fd },
   { "AMediaFormat_delete", (uintptr_t)&stub_void },
   { "AMediaFormat_getFloat", (uintptr_t)&stub_media_err },
   { "AMediaFormat_getInt32", (uintptr_t)&stub_media_err },
