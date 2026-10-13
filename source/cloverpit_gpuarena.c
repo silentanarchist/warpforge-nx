@@ -190,6 +190,26 @@ unsigned cp_gpua_live_mb(void) {
   return (unsigned)((gpua_live_pages * GPUA_PAGE) >> 20);
 }
 
+/* What fills the arena: live blocks grouped by size, biggest total first.
+ * (Snapshot of the tables without the lock -- a diagnostic, not an accountant.) */
+static void gpua_histogram(void) {
+  if (gpua_state != 1) return;
+  struct { uint32_t pages; uint32_t n; } b[24]; int nb = 0;
+  for (size_t i = 0; i < gpua_pages; i++) {
+    uint32_t n = gpua_runlen[i];
+    if (!n || !gpua_used[i]) continue;
+    int k; for (k = 0; k < nb; k++) if (b[k].pages == n) break;
+    if (k == nb) { if (nb == 24) { /* fold into the nearest */ k = 23; } else { b[nb].pages = n; b[nb].n = 0; nb++; } }
+    b[k].n++;
+  }
+  for (int i = 0; i < nb; i++) for (int j = i + 1; j < nb; j++)
+    if ((uint64_t)b[j].pages * b[j].n > (uint64_t)b[i].pages * b[i].n) { typeof(b[0]) t = b[i]; b[i] = b[j]; b[j] = t; }
+  debugPrintf("[gpua] live blocks by size (MB total = KB each x count):\n");
+  for (int i = 0; i < nb && i < 12; i++)
+    debugPrintf("[gpua]   %4u MB = %7u KB x %u\n", (unsigned)(((uint64_t)b[i].pages * b[i].n * GPUA_PAGE) >> 20),
+                (unsigned)((b[i].pages * GPUA_PAGE) >> 10), b[i].n);
+}
+
 /* ---- the wrapped entry points ------------------------------------------- */
 
 /* Route only nouveau's buffer shape: alignment >= 0x1000 AND size >= GPUA_MIN.
@@ -241,6 +261,7 @@ void *__wrap_memalign(size_t align, size_t size) {
       nf++;
       debugPrintf("[gpua] memalign FAILED size=%u KB (arena live=%u MB peak=%u MB)\n",
                   (unsigned)(size >> 10), cp_gpua_live_mb(), cp_gpua_peak_mb());
+      gpua_histogram();
     }
   }
   return p;

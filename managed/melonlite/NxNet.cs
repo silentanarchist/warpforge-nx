@@ -166,7 +166,18 @@ namespace MelonLoader.Switch
                     return await _plain.SendAsync(request, ct).ConfigureAwait(false);
                 var b = new UriBuilder(uri) { Scheme = "http", Port = uri.Port };   // keep the https port (443 or the server's)
                 request.RequestUri = b.Uri;
+                var t0 = Environment.TickCount64;
                 try { return await _tls.SendAsync(request, ct).ConfigureAwait(false); }
+                catch (Exception e)
+                {
+                    // one line per failure with what was sent: the post-match report failed four
+                    // times in a row with "response ended prematurely" while small requests worked
+                    long? len = request.Content?.Headers.ContentLength;
+                    MelonLogger.Warning("[switch] [https] " + request.Method + " " + uri.AbsolutePath + " body=" + (len.HasValue ? len.Value.ToString() : "?")
+                        + " bytes failed after " + (Environment.TickCount64 - t0) + " ms: " + e.GetType().Name + ": " + e.Message
+                        + (e.InnerException != null ? " <- " + e.InnerException.GetType().Name + ": " + e.InnerException.Message : ""));
+                    throw;
+                }
                 finally { request.RequestUri = uri; }
             }
         }

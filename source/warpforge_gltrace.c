@@ -73,7 +73,13 @@ static void once_extensions(void) {
 
 static void note(const char *call, GLenum ifmt, GLsizei w, GLsizei h, GLsizei depth, GLsizei levels, GLsizei bytes) {
   if (w < BIG && h < BIG) return;
-  if (g_logged >= TRACE_MAX) return;
+  /* the 1080p render targets come and go all session; after the first 40 lines
+   * only the really big ones (2048x2048 and up, the 21 MB class) are logged */
+  static unsigned big_logged;
+  if (g_logged >= TRACE_MAX) {
+    if ((uint64_t)w * (uint64_t)h < 2048ull * 2048ull || big_logged >= 200) return;
+    big_logged++;
+  }
   g_logged++;
   once_extensions();
   const char *n = fmt_name(ifmt);
@@ -82,7 +88,7 @@ static void note(const char *call, GLenum ifmt, GLsizei w, GLsizei h, GLsizei de
   else           snprintf(dim, sizeof dim, "%dx%d", (int)w, (int)h);
   if (n) debugPrintf("[gltrace] %s %s %s levels=%d bytes=%d\n", call, n, dim, (int)levels, (int)bytes);
   else   debugPrintf("[gltrace] %s 0x%04x %s levels=%d bytes=%d\n", call, (unsigned)ifmt, dim, (int)levels, (int)bytes);
-  if (g_logged == TRACE_MAX) debugPrintf("[gltrace] (quiet from here)\n");
+  if (g_logged == TRACE_MAX) debugPrintf("[gltrace] (from here only textures of 2048x2048 and up)\n");
 }
 
 /* The real entry points, looked up once. */
