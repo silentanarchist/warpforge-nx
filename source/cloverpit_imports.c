@@ -67,6 +67,25 @@ static void *stub_null(void)      { return NULL; }
 static void  stub_void(void)      { }
 static int   stub_zero(void)      { return 0; }
 static int64_t stub_neg1_64(void) { return -1; }
+/* Which videos does the game try to play, and when? (the end-of-round win/loss
+ * animation does not show; on the phone it plays -- probably a VideoPlayer) */
+static unsigned g_media_logged;
+static void *log_extractor_new(void) {
+  if (g_media_logged < 30) { g_media_logged++;
+    debugPrintf("[video] the engine opened a video (AMediaExtractor_new) -- no decoder here, it stays blank\n"); }
+  return NULL;
+}
+static int log_set_source_fd(void *ex, int fd, int64_t off, int64_t len) {
+  (void)ex;
+  if (g_media_logged < 30) { g_media_logged++;
+    debugPrintf("[video] video source fd=%d offset=%lld length=%lld\n", fd, (long long)off, (long long)len); }
+  return AMEDIA_ERROR_UNSUPPORTED;
+}
+static int log_set_source(void *ex, const char *loc) {
+  (void)ex;
+  if (g_media_logged < 30) { g_media_logged++; debugPrintf("[video] video source %s\n", loc ? loc : "(null)"); }
+  return AMEDIA_ERROR_UNSUPPORTED;
+}
 
 
 /* ANativeWindow_toSurface: hand back the fake Surface jobject the wrapper
@@ -124,13 +143,13 @@ DynLibFunction cloverpit_imports[] = {
   { "AMediaExtractor_getSampleTrackIndex", (uintptr_t)&stub_neg1_64 },
   { "AMediaExtractor_getTrackCount", (uintptr_t)&stub_zero },
   { "AMediaExtractor_getTrackFormat", (uintptr_t)&stub_null },
-  { "AMediaExtractor_new", (uintptr_t)&stub_null },
+  { "AMediaExtractor_new", (uintptr_t)&log_extractor_new },
   { "AMediaExtractor_readSampleData", (uintptr_t)&stub_neg1_64 },
   { "AMediaExtractor_seekTo", (uintptr_t)&stub_media_err },
   { "AMediaExtractor_selectTrack", (uintptr_t)&stub_media_err },
-  { "AMediaExtractor_setDataSource", (uintptr_t)&stub_media_err },
+  { "AMediaExtractor_setDataSource", (uintptr_t)&log_set_source },
   { "AMediaExtractor_setDataSourceCustom", (uintptr_t)&stub_media_err },
-  { "AMediaExtractor_setDataSourceFd", (uintptr_t)&stub_media_err },
+  { "AMediaExtractor_setDataSourceFd", (uintptr_t)&log_set_source_fd },
   { "AMediaFormat_delete", (uintptr_t)&stub_void },
   { "AMediaFormat_getFloat", (uintptr_t)&stub_media_err },
   { "AMediaFormat_getInt32", (uintptr_t)&stub_media_err },
