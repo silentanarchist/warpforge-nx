@@ -8,6 +8,9 @@
 /* Bind the API exports. Call once after libil2cpp is loaded. 0 on success. */
 int wf_resolve_bind(so_module *il2cpp);
 
+/* The libil2cpp module bound above. */
+so_module *wf_resolve_module(void);
+
 /* Non-zero once il2cpp_init has run (the domain exists). */
 int wf_resolve_ready(void);
 

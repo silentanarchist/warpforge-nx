@@ -96,6 +96,8 @@ void *wf_dlsym_interpose(const char *symbol) {
   return NULL;
 }
 
+so_module *wf_resolve_module(void) { return g_il2cpp; }
+
 int wf_resolve_ready(void) {
   return g_runtime_up && p_domain_get != NULL;
 }

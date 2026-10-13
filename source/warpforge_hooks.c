@@ -24,12 +24,14 @@
 static int g_done;
 
 void wf_hooks_tick(void) {
-  if (g_done || !wf_resolve_ready())
+  if (g_done) { extern void wf_endstill_tick(void); wf_endstill_tick(); return; }
+  if (!wf_resolve_ready())
     return;
   g_done = 1;
   debugPrintf("[hooks] il2cpp domain is up -- installing managed hooks by name\n");
   cp_time_install(NULL);
   cp_touchhook_install(NULL);
+  { extern void wf_endstill_install(so_module *); wf_endstill_install(wf_resolve_module()); }
   /* Mod milestone 2: managed code (Mono) calling the IL2CPP C API by name.
    * After our own hooks, so the probe sees the same hooked Time getters. */
   extern void wf_mono_on_il2cpp_ready(void);
