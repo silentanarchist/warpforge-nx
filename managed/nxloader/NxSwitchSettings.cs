@@ -13,7 +13,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace WarpforgeNx
 {
@@ -21,7 +21,13 @@ namespace WarpforgeNx
     {
         public static int TextureMipLimit { get; private set; }
 
-        static PropertyInfo s_mipProp;
+        // Unity's own internal calls, resolved by name. Reflection over the generated
+        // QualitySettings proxy made Mono NX abort ("should not be reached",
+        // class.c:2324) on a member type it cannot map -- a black screen at boot.
+        [DllImport("il2cpp")] static extern IntPtr il2cpp_resolve_icall([MarshalAs(UnmanagedType.LPStr)] string name);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int GetInt();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void SetInt(int v);
+        static GetInt s_get; static SetInt s_set;
         static int s_frames, s_failed, s_reapplied;
 
         public static void Load()
@@ -60,19 +66,24 @@ namespace WarpforgeNx
             if (s_frames++ % 60 != 0) return;
             try
             {
-                if (s_mipProp == null)
+                if (s_set == null)
                 {
-                    var core = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "UnityEngine.CoreModule");
-                    if (core == null) return;
-                    var qs = core.GetType("UnityEngine.QualitySettings", true);
-                    s_mipProp = qs.GetProperty("globalTextureMipmapLimit", BindingFlags.Public | BindingFlags.Static)
-                                ?? qs.GetProperty("masterTextureLimit", BindingFlags.Public | BindingFlags.Static)
-                                ?? throw new Exception("QualitySettings has no globalTextureMipmapLimit/masterTextureLimit");
+                    foreach (var name in new[] { "globalTextureMipmapLimit", "masterTextureLimit" })
+                    {
+                        IntPtr g = il2cpp_resolve_icall("UnityEngine.QualitySettings::get_" + name);
+                        IntPtr p = il2cpp_resolve_icall("UnityEngine.QualitySettings::set_" + name);
+                        if (p == IntPtr.Zero) continue;
+                        s_set = Marshal.GetDelegateForFunctionPointer<SetInt>(p);
+                        if (g != IntPtr.Zero) s_get = Marshal.GetDelegateForFunctionPointer<GetInt>(g);
+                        Entry.Log("loader: texture mip limit through QualitySettings::set_" + name);
+                        break;
+                    }
+                    if (s_set == null) { s_failed++; Entry.Log("loader: texture mip limit: no QualitySettings setter found -- setting ignored"); return; }
                 }
-                int cur = Convert.ToInt32(s_mipProp.GetValue(null));
+                int cur = s_get != null ? s_get() : -1;
                 if (cur != TextureMipLimit)
                 {
-                    s_mipProp.SetValue(null, TextureMipLimit);
+                    s_set(TextureMipLimit);
                     if (s_reapplied++ < 10)
                         Entry.Log($"loader: texture mip limit {cur} -> {TextureMipLimit} (switch.cfg)");
                 }
