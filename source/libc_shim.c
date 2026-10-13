@@ -632,7 +632,33 @@ static const char *asset_redirect(const char *path, char *buf, size_t bufsz) {
   return path;
 }
 
+/* Which files does the engine open, how often and how slowly? The slow-frame
+ * sampler caught the main thread inside an open(..., O_CREAT, 0666) from
+ * libunity during battle hitches. Every path is counted; a path is logged the
+ * 1st, 2nd, 4th, 8th... time it is opened (so a file reopened every second
+ * shows up as a climbing count), and any open+fstat over 15 ms is logged. */
+#define OPEN_STATS 128
+static struct { char path[96]; unsigned n; } g_open_stats[OPEN_STATS];
+static unsigned g_open_stats_n, g_open_slow_logged;
+static Mutex g_open_stats_lock;
+static void open_note(const char *path, int writing, u64 t0) {
+  u64 ms = (armGetSystemTick() - t0) / (armGetSystemTickFreq() / 1000);
+  const char *b = path; size_t L = strlen(path); if (L > 95) b = path + L - 95;
+  unsigned n = 0;
+  mutexLock(&g_open_stats_lock);
+  unsigned i;
+  for (i = 0; i < g_open_stats_n; i++) if (!strcmp(g_open_stats[i].path, b)) break;
+  if (i == g_open_stats_n && g_open_stats_n < OPEN_STATS) { snprintf(g_open_stats[i].path, sizeof g_open_stats[i].path, "%s", b); g_open_stats_n++; }
+  if (i < g_open_stats_n) n = ++g_open_stats[i].n;
+  mutexUnlock(&g_open_stats_lock);
+  if (n && (n & (n - 1)) == 0 && n >= 4)
+    debugPrintf("[io] %s opened %u times so far (%s)\n", b, n, writing ? "for writing" : "read-only");
+  if (ms >= 15 && g_open_slow_logged < 40) { g_open_slow_logged++;
+    debugPrintf("[io] slow open: %s took %llu ms (%s)\n", b, (unsigned long long)ms, writing ? "write" : "read"); }
+}
+
 int open_fake(const char *path, int flags, ...) {
+  u64 _t0 = armGetSystemTick();
   char _rbuf[512];
   path = casetest_redirect(path);
   path = asset_redirect(path, _rbuf, sizeof _rbuf);
@@ -695,6 +721,7 @@ int open_fake(const char *path, int flags, ...) {
   } else {
     if (TRACE_IO) debugPrintf("[io] open(%s,0x%x) -> %d\n", path, flags, fd);
   }
+  if (path) open_note(path, writing, _t0);
   return fd;
 }
 int openat_fake(int dirfd, const char *path, int flags, ...) {
