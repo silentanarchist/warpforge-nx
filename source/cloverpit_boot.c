@@ -381,6 +381,14 @@ int cp_boot_and_run(void) {
                       "mono %u used, %u heap of %u | newlib %u MB in use of %u\n",
                       cp_gpua_live_mb(), cp_gpua_peak_mb(), ocu, occ, mar, mac, map, macap, monou, monoh, monos,
                       (unsigned)(mi.uordblks >> 20), (unsigned)(mi.arena >> 20));
+          /* what that newlib number is made of */
+          extern void mmap_heap_stats(unsigned *, unsigned *, unsigned *, unsigned *);
+          unsigned fbm = 0, fbf = 0, pin = 0, ftot = 0; mmap_heap_stats(&fbm, &fbf, &pin, &ftot);
+          unsigned used = (unsigned)(mi.uordblks >> 20);
+          unsigned known = 512u + occ + fbm + pin;   /* GPU arena reservation + commit pool + mmap copies */
+          debugPrintf("[mem] newlib split: GPU arena 512 reserved | commit pool %u | mmap copies %u (%u of them files) + %u pinned read-only files | "
+                      "everything else %u MB (engine/driver/runtime malloc) | file maps copied in so far %u MB\n",
+                      occ, fbm, fbf, pin, used > known ? used - known : 0, ftot);
         }
       }
       frames = 0;

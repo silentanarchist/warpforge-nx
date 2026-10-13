@@ -1472,7 +1472,8 @@ static void mmap_arena_free(void *addr, size_t len) {
 // sub-1MB il2cpp allocations that were failing and surfaces il2cpp's true mmap
 // appetite in the log to size the proper fix.
 #define MMAP_FALLBACK_MAX 4096
-static struct { void *ptr; size_t len; } g_fb[MMAP_FALLBACK_MAX];
+static struct { void *ptr; size_t len; int file; } g_fb[MMAP_FALLBACK_MAX];
+static size_t g_fb_file_bytes, g_mapc_bytes, g_filemap_total;
 static int   g_fb_n = 0;
 static size_t g_fb_bytes = 0;
 static Mutex g_fb_lock;
@@ -1500,7 +1501,9 @@ static void *mmap_fallback(size_t length, int flags, int fd, long offset) {
     if ((size_t)got < length) memset((char *)q + got, 0, length - got);
   }
   mutexLock(&g_fb_lock);
-  if (g_fb_n < MMAP_FALLBACK_MAX) { g_fb[g_fb_n].ptr = q; g_fb[g_fb_n].len = length; g_fb_n++; g_fb_bytes += length; }
+  { int file = !(flags & BIONIC_MAP_ANONYMOUS) && fd >= 0;
+    if (file) g_filemap_total += length;
+    if (g_fb_n < MMAP_FALLBACK_MAX) { g_fb[g_fb_n].ptr = q; g_fb[g_fb_n].len = length; g_fb[g_fb_n].file = file; g_fb_n++; g_fb_bytes += length; if (file) g_fb_file_bytes += length; } }
   const size_t total = g_fb_bytes;
   mutexUnlock(&g_fb_lock);
   if (TRACE_MMAP) debugPrintf("[mmap] fallback %u KB -> %p  anon=%d fd=%d off=0x%lx got=%ld (total %u MB)\n",
@@ -1516,6 +1519,7 @@ static int mmap_fallback_free(void *addr) {
     if (g_fb[i].ptr == addr) {
       free(addr);
       g_fb_bytes -= g_fb[i].len;
+      if (g_fb[i].file) g_fb_file_bytes -= g_fb[i].len;
       g_fb[i] = g_fb[--g_fb_n];
       mutexUnlock(&g_fb_lock);
       return 1;
@@ -1546,7 +1550,8 @@ static void *mapcache_get(uint64_t ino, long off, size_t len) {
 static void mapcache_put(uint64_t ino, long off, size_t len, void *ptr) {
   mutexLock(&g_fb_lock);
   for (int i = 0; i < g_fb_n; i++)          // pin: drop from fallback free-list
-    if (g_fb[i].ptr == ptr) { g_fb_bytes -= g_fb[i].len; g_fb[i] = g_fb[--g_fb_n]; break; }
+    if (g_fb[i].ptr == ptr) { g_fb_bytes -= g_fb[i].len; if (g_fb[i].file) g_fb_file_bytes -= g_fb[i].len; g_fb[i] = g_fb[--g_fb_n]; break; }
+  g_mapc_bytes += len;
   if (g_mapc_n < MAPC_N) { g_mapc[g_mapc_n].ino = ino; g_mapc[g_mapc_n].off = off;
                            g_mapc[g_mapc_n].len = len; g_mapc[g_mapc_n].ptr = ptr; g_mapc_n++; }
   mutexUnlock(&g_fb_lock);
@@ -1615,6 +1620,7 @@ void *mmap_fake(void *addr, size_t length, int prot, int flags, int fd, long off
   // Never touch beyond what we actually reserved in-arena (tail over-maps reserve
   // less than the requested length; the spill lives past the arena and is trimmed).
   size_t fill = length < reserved ? length : reserved;
+  if (!(flags & BIONIC_MAP_ANONYMOUS) && fd >= 0) { mutexLock(&g_fb_lock); g_filemap_total += fill; mutexUnlock(&g_fb_lock); }
 
   if (g_overcommit) {
     // PROT_NONE reservation: address space only, no physical -- the whole point.
@@ -1655,6 +1661,14 @@ void *mmap_fake(void *addr, size_t length, int prot, int flags, int fd, long off
                   ((size_t)got < length) ? "  *** TRUNCATED ***" : "");
   }
   return p;
+}
+
+/* For the [mem] line: what of the heap is held by emulated mmaps. */
+void mmap_heap_stats(unsigned *fallback_mb, unsigned *file_mb, unsigned *pinned_mb, unsigned *file_total_mb) {
+  mutexLock(&g_fb_lock);
+  *fallback_mb = (unsigned)(g_fb_bytes >> 20); *file_mb = (unsigned)(g_fb_file_bytes >> 20);
+  *pinned_mb = (unsigned)(g_mapc_bytes >> 20); *file_total_mb = (unsigned)(g_filemap_total >> 20);
+  mutexUnlock(&g_fb_lock);
 }
 
 int munmap_fake(void *addr, size_t length) {

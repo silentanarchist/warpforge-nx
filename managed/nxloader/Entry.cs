@@ -121,6 +121,7 @@ namespace WarpforgeNx
         static void StartMelonLite()
         {
             {
+                NxSwitchSettings.Load();
                 MelonLoader.Utils.MelonEnvironment.Initialize(MelonDir);
                 Log("loader: MelonLoader-lite loaded, looking for mods ...");
                 int n = MelonLoader.Switch.NxHost.LoadMods();
@@ -136,6 +137,7 @@ namespace WarpforgeNx
             s_frames++;
             if (s_frames == 1 || s_frames == 600 || s_frames == 3600) Log($"loader: OnUpdate frame {s_frames}");
             if (s_modsLoaded) MelonLoader.Switch.NxHost.Update();
+            NxSwitchSettings.Tick();
         }
 
         // Kept free of any Il2Cpp* type: the interpreter resolves every type a method
