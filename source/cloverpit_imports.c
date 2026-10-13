@@ -155,8 +155,6 @@ static int log_set_source(void *ex, const char *loc) {
   if (g_media_logged < 30) { g_media_logged++; debugPrintf("[video] video source %s\n", loc ? loc : "(null)"); }
   return AMEDIA_ERROR_UNSUPPORTED;
 }
-  return AMEDIA_ERROR_UNSUPPORTED;
-}
 
 
 /* ANativeWindow_toSurface: hand back the fake Surface jobject the wrapper
