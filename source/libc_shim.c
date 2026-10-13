@@ -1113,6 +1113,10 @@ static size_t   oc_pool_used;   // pages handed out across all chunks (stats)
 // pool share the same free memory instead of guessing the split up front.
 #define OC_GROW_BYTES ((size_t)64 * 1024 * 1024)
 static size_t   oc_live_pages;  // committed pages (diagnostic)
+#define OC_MAX_WINDOWS 3
+static struct { uint8_t *base; size_t pages; uint8_t *used, *committed; } oc_w[OC_MAX_WINDOWS];
+static int oc_nw, oc_cur;
+
 
 // Called once from main() after the newlib heap exists. window = a reserved
 // stack-region range; pool = a heap buffer. Returns 1 if OC is armed.
@@ -1155,9 +1159,6 @@ void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb) {
  * from the heap, which failed: crash in ALLOC_DEFAULT_MAIN). The oc_* globals
  * above describe the SELECTED window; oc_select() switches them. All under
  * g_mmap_lock except oc_contains, which only reads the table. */
-#define OC_MAX_WINDOWS 3
-static struct { uint8_t *base; size_t pages; uint8_t *used, *committed; } oc_w[OC_MAX_WINDOWS];
-static int oc_nw, oc_cur;
 static void oc_select(int i) {
   if (i == oc_cur) return;
   oc_w[oc_cur].base = oc_base; oc_w[oc_cur].pages = oc_pages; oc_w[oc_cur].used = oc_used; oc_w[oc_cur].committed = oc_committed;
