@@ -628,6 +628,26 @@ int main(int argc, char *argv[]) {
 
   check_syscalls();
   debugPrintf("[boot] syscalls ok\n");
+  /* How were we launched? The engine runs on this (the process's main) thread,
+   * so its stack is whatever the launcher's NPDM gave it (an NSP forwarder's
+   * own NPDM, or the game's under title takeover), and the address-space type
+   * decides the region layout. Forwarder starts crashed on load more often. */
+  {
+    MemoryInfo mi; u32 pi; int probe;
+    u64 stack_kb = 0;
+    if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)&probe))) stack_kb = mi.size >> 10;
+    u64 as_base = 0, as_size = 0, heap_base = 0, heap_size = 0, total = 0, tid = 0;
+    svcGetInfo(&as_base, InfoType_AslrRegionAddress, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&as_size, InfoType_AslrRegionSize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&heap_base, InfoType_HeapRegionAddress, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&heap_size, InfoType_HeapRegionSize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&tid, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0);
+    debugPrintf("[boot] launch: program %016llx, applet type %d, main-thread stack %llu KB, address space %llu GB @ %p, heap region %llu GB, memory %llu MB%s\n",
+                (unsigned long long)tid, (int)appletGetAppletType(), (unsigned long long)stack_kb,
+                (unsigned long long)(as_size >> 30), (void *)as_base, (unsigned long long)(heap_size >> 30),
+                (unsigned long long)(total >> 20), as_size <= (64ull << 30) ? "  (36-bit address space)" : "");
+  }
   {
     extern char *fake_heap_start, *fake_heap_end;
     debugPrintf("[boot] mem: newlib=%u MB, mmap arena=%u MB @ %p\n",
