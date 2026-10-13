@@ -245,11 +245,16 @@ static void seed_thread(void *arg) {
   while (!g_seed_cmd[i]) svcSleepThread(200000);
   if (g_seed_cmd[i] == 2) for (;;) svcSleepThread(60ull * 1000000000ull);
 }
+/* The Thread structs of the kept threads must outlive this function: libnx keeps
+ * every live thread on a linked list through its Thread struct (threadTlsAlloc
+ * walks it). The first version kept them in a local array -- Mono's first
+ * threadTlsAlloc then walked freed stack memory and crashed at boot. */
+static Thread g_seed_threads[SEED_PAGES * 8 * 4];
 static void oc_seed_tls_pages(uintptr_t win_lo, uintptr_t win_hi) {
   int kept = 0, batches = 0, idx = 0;
   u64 t0 = armGetSystemTick();
   while (kept < SEED_PAGES && batches < SEED_PAGES * 4 && idx + 8 <= (int)(sizeof g_seed_cmd / sizeof g_seed_cmd[0])) {
-    Thread th[8]; int made = 0;
+    Thread *th = &g_seed_threads[idx]; int made = 0;
     for (int k = 0; k < 8; k++) {
       Result rc = threadCreate(&th[k], seed_thread, (void *)(intptr_t)(idx + k), NULL, 0x1000, 0x3B, -2);
       if (R_SUCCEEDED(rc)) rc = threadStart(&th[k]);
