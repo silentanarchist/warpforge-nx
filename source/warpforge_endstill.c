@@ -44,11 +44,13 @@ typedef char *(*fn_type_get_name)(void *);
 typedef void *(*fn_object_new)(void *);
 typedef uint32_t (*fn_gchandle_new)(void *, uint8_t);
 typedef void (*fn_gchandle_free)(uint32_t);
+typedef void (*fn_il2cpp_free)(void *);
 
 static fn_domain_get p_domain_get; static fn_domain_assembly_open p_asm_open; static fn_assembly_get_image p_asm_image;
 static fn_class_from_name p_class; static fn_class_get_methods p_methods; static fn_method_get_name p_mname;
 static fn_method_get_param_count p_mpc; static fn_method_get_param p_mparam; static fn_type_get_name p_tname;
 static fn_object_new p_object_new; static fn_gchandle_new p_gch_new; static fn_gchandle_free p_gch_free;
+static fn_il2cpp_free p_il2cpp_free;   /* il2cpp_type_get_name's string comes from il2cpp's allocator */
 
 /* methods (MethodInfo*) and their native entry points */
 typedef struct { void *mi; void *fn; } meth_t;
@@ -79,7 +81,7 @@ static int find_method(meth_t *out, void *klass, const char *name, int argc, con
       if (!want[i]) continue;
       char *tn = p_tname(p_mparam(m, (uint32_t)i));
       if (!tn || strcmp(tn, want[i])) ok = 0;
-      free(tn);
+      if (tn) p_il2cpp_free(tn);
     }
     if (!ok) continue;
     out->mi = m; out->fn = *(void **)m;
@@ -176,9 +178,10 @@ void wf_endstill_install(so_module *il2cpp) {
   SYM(p_object_new, fn_object_new, "il2cpp_object_new");
   SYM(p_gch_new, fn_gchandle_new, "il2cpp_gchandle_new");
   SYM(p_gch_free, fn_gchandle_free, "il2cpp_gchandle_free");
+  SYM(p_il2cpp_free, fn_il2cpp_free, "il2cpp_free");
 #undef SYM
   if (!p_domain_get || !p_asm_open || !p_asm_image || !p_class || !p_methods || !p_mname || !p_mpc ||
-      !p_mparam || !p_tname || !p_object_new || !p_gch_new || !p_gch_free) {
+      !p_mparam || !p_tname || !p_object_new || !p_gch_new || !p_gch_free || !p_il2cpp_free) {
     debugPrintf("[endstill] il2cpp API incomplete -- end-screen stills off\n"); return;
   }
   void *k_doors = find_class("Assembly-CSharp.dll", "", "EndBattleDoors");
