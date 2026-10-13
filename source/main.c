@@ -565,12 +565,28 @@ int main(int argc, char *argv[]) {
    * nothing may log before this returns. */
   cp_resolve_game_root(argc, argv);
 
-  socketInitializeDefault();
+  /* BSD sessions: libnx's default is 3, and every thread inside a blocking
+   * socket call (a recv, a poll slice) holds one for the whole wait. The match
+   * tunnel alone keeps two busy, the TLS readers and Photon's threads more, so
+   * the engine's main thread waited for a free session inside an ordinary
+   * send() -- a condition-variable wait under il2cpp's Socket.Send, 54% of the
+   * samples taken during battle hitches (19:01). 16 is libnx's maximum. */
+  int bsd_sessions = 16;
+  {
+    SocketInitConfig sc = *socketGetDefaultInitConfig();
+    sc.num_bsd_sessions = 16;
+    if (R_FAILED(socketInitialize(&sc))) {
+      sc.num_bsd_sessions = 8;
+      bsd_sessions = 8;
+      if (R_FAILED(socketInitialize(&sc))) { socketInitializeDefault(); bsd_sessions = 3; }
+    }
+  }
   {
     /* The game's TLS checks certificate validity against this clock; a console
      * whose date is off fails verification with Unity's "Unknown error". */
     time_t now = time(NULL);
     struct tm *g = gmtime(&now);
+    debugPrintf("[boot] network: %d BSD sessions\n", bsd_sessions);
     if (g) debugPrintf("[boot] clock: %04d-%02d-%02d %02d:%02d:%02d UTC (epoch %lld)\n",
                        g->tm_year + 1900, g->tm_mon + 1, g->tm_mday, g->tm_hour, g->tm_min, g->tm_sec,
                        (long long)now);
