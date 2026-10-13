@@ -563,8 +563,16 @@ static int fd_close_by_path(const char *path) {
 static unsigned char g_write_fd[WFD_MAX];
 int nx_sd_dirty = 0;   /* a file has been opened for writing since the last commit */
 static void mark_write_fd(int fd)   { nx_sd_dirty = 1; if (fd >= 0 && fd < WFD_MAX) g_write_fd[fd] = 1; }
+/* A closed save file is committed by the log flusher thread within 2 s
+ * (util.c), not here: this ran on whichever thread closed the file, the main
+ * thread included, and an SD commit there was a visible hitch. */
 static void commit_write_fd(int fd) { if (fd >= 0 && fd < WFD_MAX && g_write_fd[fd]) {
-                                        g_write_fd[fd] = 0; nx_sd_dirty = 0; fsdevCommitDevice("sdmc"); } }
+                                        g_write_fd[fd] = 0; nx_sd_dirty = 1; } }
+void nx_sd_commit_if_dirty(void) {
+  if (!nx_sd_dirty) return;
+  nx_sd_dirty = 0;
+  fsdevCommitDevice("sdmc");
+}
 
 /* Commit any pending writes to the physical card. Called periodically from the render loop and
  * after the game's save (nx_save_prefs), so the save survives a HOME-kill / reboot. */
@@ -639,12 +647,18 @@ int open_fake(const char *path, int flags, ...) {
     // scene/asset load. Materialize a buffer of real CSPRNG bytes (libnx
     // randomGet) into a file and hand back a real fd so read() just works.
     if (!strcmp(path, "/dev/urandom") || !strcmp(path, "/dev/random")) {
+      /* written once per run (it used to be rewritten -- a 64 KB SD write -- on
+       * every open, and the engine opens it often) */
       static char rbuf[65536];
-      randomGet(rbuf, sizeof rbuf);
+      static int written;
       char tf[256];
       snprintf(tf, sizeof tf, "%s/.synth_dev_random", cp_game_root());
-      int wfd = open(tf, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-      if (wfd >= 0) { if (write(wfd, rbuf, sizeof rbuf) < 0) { /* best effort */ } close(wfd); }
+      if (!written) {
+        written = 1;
+        randomGet(rbuf, sizeof rbuf);
+        int wfd = open(tf, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (wfd >= 0) { if (write(wfd, rbuf, sizeof rbuf) < 0) { /* best effort */ } close(wfd); }
+      }
       int rfd = open(tf, O_RDONLY);
       fd_ino_set(rfd, path);
       if (TRACE_IO) debugPrintf("[io] open(%s,0x%x) -> %d [urandom]\n", path, flags, rfd);

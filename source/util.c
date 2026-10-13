@@ -140,6 +140,43 @@ void debug_log_flush(void) {
 #endif
 }
 
+#if DEBUG_LOG
+/* Log flushing and SD commits happen on this thread, never on the caller's.
+ * Every [managed] and [loop] line used to fflush on the spot, and the render
+ * loop committed the SD card every 120 frames: on the engine's main thread that
+ * is an SD write several times a second, and it was the short freeze "every
+ * second or two" in battle (the slow-frame sampler found the main thread in
+ * svcSendSyncRequest = the filesystem). Urgent lines are now on the card within
+ * ~100 ms, the rest within 2 s; the crash handler still flushes directly. */
+static volatile int g_log_urgent;
+static Thread g_flusher;
+static int g_flusher_started;
+__attribute__((weak)) void nx_sd_commit_if_dirty(void) {}
+static void flusher_main(void *arg) {
+  (void)arg;
+  uint64_t last_commit = log_now_ns();
+  for (;;) {
+    svcSleepThread(100000000ull);
+    uint64_t now = log_now_ns();
+    int flush = 0;
+    mutexLock(&g_log_lock);
+    if (g_logf && g_log_dirty && (g_log_urgent || now - g_log_last_flush_ns >= LOG_FLUSH_INTERVAL_NS)) {
+      flush = 1; g_log_dirty = 0; g_log_urgent = 0; g_log_last_flush_ns = now;
+    }
+    mutexUnlock(&g_log_lock);
+    if (flush) fflush(g_logf);
+    if (now - last_commit >= LOG_FLUSH_INTERVAL_NS) { last_commit = now; nx_sd_commit_if_dirty(); }
+  }
+}
+static void flusher_start(void) {
+  if (g_flusher_started) return;
+  g_flusher_started = 1;
+  if (R_SUCCEEDED(threadCreate(&g_flusher, flusher_main, NULL, NULL, 0x4000, 0x2C, -2)))
+    threadStart(&g_flusher);
+  else g_flusher_started = -1;
+}
+#endif
+
 int debugPrintf(char *text, ...) {
 #if DEBUG_LOG
   va_list list;
@@ -169,9 +206,13 @@ int debugPrintf(char *text, ...) {
     uint64_t now = log_now_ns();
     want_flush = (log_is_important(text) ||
                   now - g_log_last_flush_ns >= LOG_FLUSH_INTERVAL_NS);
-    if (want_flush) { g_log_dirty = 0; g_log_last_flush_ns = now; }
+    if (g_flusher_started > 0) {          /* the flusher thread does it */
+      if (log_is_important(text)) g_log_urgent = 1;
+      want_flush = 0;
+    } else if (want_flush) { g_log_dirty = 0; g_log_last_flush_ns = now; }
   }
   mutexUnlock(&g_log_lock);
+  if (!g_flusher_started) flusher_start();
 
   /* Flush OUTSIDE the lock. Holding a global mutex across a blocking SD write
    * makes every other thread that logs wait on whichever thread is currently

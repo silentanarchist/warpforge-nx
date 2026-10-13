@@ -313,8 +313,8 @@ int cp_boot_and_run(void) {
     /* Commit pending saves roughly every 2s. Without this the PlayerPrefs store
      * only reaches the SD card on focus-loss or clean exit, so a crash or a
      * yanked console loses the run -- which matters for a roguelike. */
-    if ((frame_no % 120) == 0)
-      nx_sd_flush();
+    /* (the log flusher thread commits pending saves every 2 s now, off this
+     * thread -- see util.c) */
 
     /* FRAME LIMITER. Pace to 60 Hz, and ALWAYS yield at least a slice even when
      * the frame overran: with no real display vsync, a run of fast frames after
