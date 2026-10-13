@@ -1127,6 +1127,8 @@ int oc_arena_init(void *window, size_t window_bytes, void *pool, size_t pool_byt
   oc_pool = (uint8_t *)pool; oc_pool_pages = pool_bytes / MMAP_PAGE;
   oc_pool_bump = 0; oc_live_pages = 0;
   oc_pool_total = oc_pool_pages; oc_pool_used = 0;
+  oc_w[0].base = oc_base; oc_w[0].pages = oc_pages; oc_w[0].used = u; oc_w[0].committed = c;
+  oc_nw = 1; oc_cur = 0;
   mutexUnlock(&g_mmap_lock);
   return 1;
 }
@@ -1147,9 +1149,43 @@ void oc_pool_stats(unsigned *used_mb, unsigned *cap_mb) {
   *cap_mb  = (unsigned)((oc_pool_total * MMAP_PAGE) >> 20);
 }
 
-static int oc_contains(void *addr) {
-  return oc_pages && (uint8_t *)addr >= oc_base &&
-         (uint8_t *)addr < oc_base + oc_pages * MMAP_PAGE;
+/* Up to OC_MAX_WINDOWS windows (the stack region often has two big holes; one
+ * window ran out of ADDRESS SPACE in battle -- Unity's 256 MB pool slots -- with
+ * physical memory to spare, and the next pool fell back to a 128 MB memalign
+ * from the heap, which failed: crash in ALLOC_DEFAULT_MAIN). The oc_* globals
+ * above describe the SELECTED window; oc_select() switches them. All under
+ * g_mmap_lock except oc_contains, which only reads the table. */
+#define OC_MAX_WINDOWS 3
+static struct { uint8_t *base; size_t pages; uint8_t *used, *committed; } oc_w[OC_MAX_WINDOWS];
+static int oc_nw, oc_cur;
+static void oc_select(int i) {
+  if (i == oc_cur) return;
+  oc_w[oc_cur].base = oc_base; oc_w[oc_cur].pages = oc_pages; oc_w[oc_cur].used = oc_used; oc_w[oc_cur].committed = oc_committed;
+  oc_cur = i;
+  oc_base = oc_w[i].base; oc_pages = oc_w[i].pages; oc_used = oc_w[i].used; oc_committed = oc_w[i].committed;
+}
+static int oc_window_of(void *addr) {
+  for (int i = 0; i < oc_nw; i++) {
+    uint8_t *b = (i == oc_cur) ? oc_base : oc_w[i].base;
+    size_t   n = (i == oc_cur) ? oc_pages : oc_w[i].pages;
+    if (n && (uint8_t *)addr >= b && (uint8_t *)addr < b + n * MMAP_PAGE) return i;
+  }
+  return -1;
+}
+static int oc_contains(void *addr) { return oc_window_of(addr) >= 0; }
+
+/* A further window (main.c, after the first is armed). */
+int oc_arena_add_window(void *window, size_t window_bytes) {
+  if (!window || !window_bytes || oc_nw <= 0 || oc_nw >= OC_MAX_WINDOWS) return 0;
+  size_t wp = window_bytes / MMAP_PAGE;
+  uint8_t *u = (uint8_t *)calloc(wp, 1);
+  uint8_t *c = (uint8_t *)calloc(wp, 1);
+  if (!u || !c) { free(u); free(c); return 0; }
+  mutexLock(&g_mmap_lock);
+  oc_w[oc_nw].base = (uint8_t *)window; oc_w[oc_nw].pages = wp; oc_w[oc_nw].used = u; oc_w[oc_nw].committed = c;
+  oc_nw++;
+  mutexUnlock(&g_mmap_lock);
+  return 1;
 }
 
 // A thread stack (e.g. an audio worker's) can get mapped by libnx INSIDE the OC
@@ -1187,7 +1223,7 @@ static int oc_range_occupied(size_t i, size_t need) {
 // Reserve address space in the OC window. Mirrors mmap_arena_alloc_locked's
 // 256MB-aligned tail-overflow so Unity's 511MB over-map nets one 256MB slot.
 // caller holds g_mmap_lock.
-static void *oc_alloc_locked(size_t len, size_t *got) {
+static void *oc_alloc_one_locked(size_t len, size_t *got) {
   *got = 0;
   if (!oc_pages) return NULL;
   size_t need = (len + MMAP_PAGE - 1) / MMAP_PAGE; if (!need) need = 1;
@@ -1214,10 +1250,25 @@ static void *oc_alloc_locked(size_t len, size_t *got) {
   return NULL;
 }
 
+static void *oc_alloc_locked(size_t len, size_t *got) {
+  for (int i = 0; i < oc_nw; i++) {
+    oc_select(i);
+    void *p = oc_alloc_one_locked(len, got);
+    if (p) {
+      static int logged[OC_MAX_WINDOWS];
+      if (i > 0 && !logged[i]) { logged[i] = 1;
+        debugPrintf("[oc] window %d full; reservations now go to window %d (%p)\n", i - 1, i, (void *)oc_base); }
+      return p;
+    }
+  }
+  return NULL;
+}
+
 // Commit [addr,len): alias contiguous bump-pool runs into the reserved OC range
 // via svcMapMemory (which remaps the pool source away -- we only access via the
 // OC address). Already-committed pages are skipped. caller holds g_mmap_lock.
 static void oc_commit_locked(void *addr, size_t len) {
+  { int w = oc_window_of(addr); if (w < 0) return; oc_select(w); }
   if ((uint8_t *)addr < oc_base) return;
   size_t first = ((uint8_t *)addr - oc_base) / MMAP_PAGE;
   size_t cnt   = (len + MMAP_PAGE - 1) / MMAP_PAGE;
@@ -1275,6 +1326,7 @@ static void oc_commit_locked(void *addr, size_t len) {
 // Unity trims after each over-map). Committed pages stay reserved+mapped (a small
 // bounded leak) so a later reservation can't collide with a live alias.
 static void oc_free_locked(void *addr, size_t len) {
+  { int w = oc_window_of(addr); if (w < 0) return; oc_select(w); }
   if ((uint8_t *)addr < oc_base) return;
   size_t first = ((uint8_t *)addr - oc_base) / MMAP_PAGE;
   size_t cnt   = (len + MMAP_PAGE - 1) / MMAP_PAGE;
@@ -1476,7 +1528,7 @@ void *mmap_fake(void *addr, size_t length, int prot, int flags, int fd, long off
   // Big anonymous PROT_NONE reservations -> stack-region OC arena: cheap address
   // space now, physical aliased in on the later mprotect(RW). On a full window we
   // fall through to the heap-backed arena below (no behaviour change there).
-  if (oc_pages && length >= MMAP_BIG_THRESH &&
+  if (oc_nw > 0 && length >= MMAP_BIG_THRESH &&
       (flags & BIONIC_MAP_ANONYMOUS) && prot == BIONIC_PROT_NONE) {
     size_t ocres = 0;
     mutexLock(&g_mmap_lock);
@@ -2282,11 +2334,49 @@ void wf_gc_check_stuck(void) {
   mutexUnlock(&g_gc_paused_lock);
 }
 
+/* Thread pause/resume is shared with the slow-frame sampler (diag.c), which must
+ * never resume a thread the collector has paused: both take this lock around
+ * their pause..resume, and the sampler asks wf_gc_is_paused first. */
+static Mutex g_activity_lock;
+void wf_activity_lock(void)   { mutexLock(&g_activity_lock); }
+void wf_activity_unlock(void) { mutexUnlock(&g_activity_lock); }
+int wf_gc_is_paused(Handle h) {
+  int r = 0;
+  mutexLock(&g_gc_paused_lock);
+  for (int i = 0; i < GC_PAUSED_MAX; i++) if (g_gc_paused[i].h == h) { r = 1; break; }
+  mutexUnlock(&g_gc_paused_lock);
+  return r;
+}
+/* Collection timing: from the first suspend of a cycle to the last restart. */
+static u64 g_gc_cycle_t0, g_gc_cycle_t1;
+static unsigned g_gc_cycles; static u64 g_gc_total_ticks, g_gc_max_ticks;
+static volatile int g_gc_active;
+int wf_gc_active(void) { return g_gc_active; }
+static void gc_cycle_close(void) {
+  if (g_gc_cycle_t0 && g_gc_cycle_t1 > g_gc_cycle_t0) {
+    u64 d = g_gc_cycle_t1 - g_gc_cycle_t0;
+    g_gc_cycles++; g_gc_total_ticks += d; if (d > g_gc_max_ticks) g_gc_max_ticks = d;
+  }
+  g_gc_cycle_t0 = g_gc_cycle_t1 = 0;
+}
+void wf_gc_stats_take(unsigned *n, unsigned *total_ms, unsigned *max_ms) {
+  u64 f = armGetSystemTickFreq() / 1000;
+  *n = g_gc_cycles; *total_ms = (unsigned)(g_gc_total_ticks / f); *max_ms = (unsigned)(g_gc_max_ticks / f);
+  g_gc_cycles = 0; g_gc_total_ticks = g_gc_max_ticks = 0;
+}
+
 static int g_gc_pause_disabled;    /* set once if pausing ever fails outright */
 static unsigned g_gc_pauses, g_gc_pause_misses, g_gc_misses_logged;
+static int gc_pause_thread_inner(uintptr_t b, pthread_t t, Handle h);
 static int gc_pause_thread(uintptr_t b, pthread_t t) {
   Handle h = gc_thread_handle(t);
   if (h == INVALID_HANDLE) return -1;
+  mutexLock(&g_activity_lock);
+  int r = gc_pause_thread_inner(b, t, h);
+  mutexUnlock(&g_activity_lock);
+  return r;
+}
+static int gc_pause_thread_inner(uintptr_t b, pthread_t t, Handle h) {
   uintptr_t rec = gc_thread_rec(b, t);
   ThreadContext ctx;
   for (int attempt = 0; attempt < 200; attempt++) {
@@ -2325,8 +2415,10 @@ static void gc_resume_thread(uintptr_t b, pthread_t t) {
   if (h == INVALID_HANDLE) return;
   uintptr_t rec = gc_thread_rec(b, t);
   if (rec) *(uintptr_t *)(rec + GCT_LAST_STOP) = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF) | 1;
+  mutexLock(&g_activity_lock);
   gc_paused_remove(h);
   svcSetThreadActivity(h, ThreadActivity_Runnable);
+  mutexUnlock(&g_activity_lock);
 }
 
 
@@ -2413,6 +2505,8 @@ int pthread_kill_gc(pthread_t t, int sig) {
       static uintptr_t seen_cycle = ~(uintptr_t)0;
       uintptr_t cycle = *(volatile uintptr_t *)(b + GC_STOP_COUNT_OFF);
       if (cycle != seen_cycle) {
+        gc_cycle_close();
+        g_gc_cycle_t0 = armGetSystemTick(); g_gc_active = 1;
         if (seen_cycle == ~(uintptr_t)0)
           debugPrintf("[gc] stop-world suspend sig=%d restart sig=%d gate=%d -> threads are paused "
                       "(svcSetThreadActivity) and their registers+stack scanned; ack via sem@il2cpp+0x%x\n",
@@ -2434,6 +2528,7 @@ int pthread_kill_gc(pthread_t t, int sig) {
     }
     if (sig == restart_sig) {            /* start-the-world: resume, ack iff handler would */
       if (!g_gc_pause_disabled) gc_resume_thread(b, t);
+      g_gc_cycle_t1 = armGetSystemTick(); g_gc_active = 0;
       if (*(volatile int *)(b + GC_START_ACK_OFF)) sem_post_fake(ack_sem);
       return 0;
     }

@@ -90,6 +90,7 @@ unsigned g_oc_alias_mb = 0;
 void    *g_oc_win = NULL;
 int      g_oc_probe_tried = 0, g_oc_shrink_tried = 0;
 extern int oc_arena_init(void *window, size_t window_bytes, void *pool, size_t pool_bytes);
+extern int oc_arena_add_window(void *window, size_t window_bytes);
 unsigned g_oc_probe_rc = 0, g_oc_shrink_rc = 0;
 unsigned long g_oc_win_addr = 0;
 u64      g_oc_sysres = 0;
@@ -250,7 +251,7 @@ static void seed_thread(void *arg) {
  * walks it). The first version kept them in a local array -- Mono's first
  * threadTlsAlloc then walked freed stack memory and crashed at boot. */
 static Thread g_seed_threads[SEED_PAGES * 8 * 4];
-static void oc_seed_tls_pages(uintptr_t win_lo, uintptr_t win_hi) {
+static void oc_seed_tls_pages(const uintptr_t *win_lo, const uintptr_t *win_hi, int nwin) {
   int kept = 0, batches = 0, idx = 0;
   u64 t0 = armGetSystemTick();
   while (kept < SEED_PAGES && batches < SEED_PAGES * 4 && idx + 8 <= (int)(sizeof g_seed_cmd / sizeof g_seed_cmd[0])) {
@@ -269,7 +270,9 @@ static void oc_seed_tls_pages(uintptr_t win_lo, uintptr_t win_hi) {
     int keep[8] = {0};
     for (int k = 0; k < made; k++) {
       uintptr_t page = g_seed_tls[idx + k] & ~(uintptr_t)0xfff;
-      if (!page || (page >= win_lo && page < win_hi)) continue;
+      if (!page) continue;
+      int inside = 0; for (int w = 0; w < nwin; w++) if (page >= win_lo[w] && page < win_hi[w]) inside = 1;
+      if (inside) continue;
       int dup = 0; for (int j = 0; j < k; j++) if (keep[j] && (g_seed_tls[idx + j] & ~(uintptr_t)0xfff) == page) dup = 1;
       if (!dup && kept < SEED_PAGES) { keep[k] = 1; kept++; }
     }
@@ -280,6 +283,52 @@ static void oc_seed_tls_pages(uintptr_t win_lo, uintptr_t win_hi) {
   }
   debugPrintf("[oc] TLS seed: %d pages kept outside the window (%d free slots) in %d batches, %u ms\n",
               kept, kept * 7, batches, (unsigned)((armGetSystemTick() - t0) / (armGetSystemTickFreq() / 1000)));
+}
+
+/* A second (third) OC window: the largest 256 MB-aligned free run in the stack
+ * region outside the windows already taken, keeping OC_STACK_RESERVE of the
+ * region free overall. */
+static void *oc_find_extra_window(const uintptr_t *lo, const uintptr_t *hi, int n, size_t *out_size) {
+  *out_size = 0;
+  u64 sbase = 0, ssize = 0;
+  svcGetInfo(&sbase, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0);
+  svcGetInfo(&ssize, InfoType_StackRegionSize,    CUR_PROCESS_HANDLE, 0);
+  if (!sbase || !ssize) return NULL;
+  u64 end = sbase + ssize, a = sbase, free_total = 0, best_a = 0, best_l = 0, taken = 0;
+  for (int k = 0; k < n; k++) taken += hi[k] - lo[k];
+  while (a < end) {
+    MemoryInfo mi; u32 pi;
+    if (R_FAILED(svcQueryMemory(&mi, &pi, a))) break;
+    u64 me = mi.addr + mi.size;
+    if (me <= a) break;
+    if (mi.type == MemType_Unmapped) {
+      u64 hs = mi.addr < sbase ? sbase : mi.addr, he = me > end ? end : me;
+      free_total += he - hs;
+      /* cut the taken windows out of this hole; consider each remaining piece */
+      u64 ps = hs;
+      while (ps < he) {
+        u64 pe = he;
+        for (int k = 0; k < n; k++) {
+          if (lo[k] <= ps && hi[k] > ps) { ps = hi[k]; pe = 0; break; }
+          if (lo[k] > ps && lo[k] < pe) pe = lo[k];
+        }
+        if (!pe) continue;
+        u64 al = (ps + (MMAP_ARENA_ALIGN - 1)) & ~(MMAP_ARENA_ALIGN - 1);
+        if (al < pe) {
+          u64 l = (pe - al) & ~(MMAP_ARENA_ALIGN - 1);
+          if (l > best_l) { best_l = l; best_a = al; }
+        }
+        ps = pe;
+      }
+    }
+    a = me;
+  }
+  u64 room = free_total > taken + OC_STACK_RESERVE ? free_total - taken - OC_STACK_RESERVE : 0;
+  room &= ~(MMAP_ARENA_ALIGN - 1);
+  if (best_l > room) best_l = room;
+  if (!best_a || best_l < MMAP_ARENA_ALIGN) return NULL;
+  *out_size = best_l;
+  return (void *)best_a;
 }
 
 static int overcommit_setup(void *addr, size_t size, size_t so_zone,
@@ -605,7 +654,20 @@ int main(int argc, char *argv[]) {
       if (pool && oc_arena_init(win, winsz, pool, OC_POOL_BYTES)) {
         debugPrintf("[oc] ARMED: window %u MB @ %p, pool %u MB @ %p\n",
                     (unsigned)(winsz >> 20), win, (unsigned)(OC_POOL_BYTES >> 20), pool);
-        oc_seed_tls_pages((uintptr_t)win, (uintptr_t)win + winsz);
+        uintptr_t lo[3] = { (uintptr_t)win }, hi[3] = { (uintptr_t)win + winsz };
+        int nwin = 1;
+        while (nwin < 3) {
+          size_t xs = 0;
+          void *xw = oc_find_extra_window(lo, hi, nwin, &xs);
+          if (!xw) break;
+          virtmemLock();
+          VirtmemReservation *xr = virtmemAddReservation(xw, xs);
+          virtmemUnlock();
+          if (!xr || !oc_arena_add_window(xw, xs)) break;
+          debugPrintf("[oc] extra window %d: %u MB @ %p\n", nwin, (unsigned)(xs >> 20), xw);
+          lo[nwin] = (uintptr_t)xw; hi[nwin] = (uintptr_t)xw + xs; nwin++;
+        }
+        oc_seed_tls_pages(lo, hi, nwin);
       } else
         debugPrintf("[oc] DISABLED: pool=%p init failed -> heap-backed only\n", pool);
     } else {

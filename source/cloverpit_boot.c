@@ -358,6 +358,9 @@ int cp_boot_and_run(void) {
       }
 #if WF_MONO
       { extern void wf_gc_check_stuck(void); wf_gc_check_stuck(); }
+      { extern void wf_gc_stats_take(unsigned *, unsigned *, unsigned *);
+        unsigned gn, gt, gm; wf_gc_stats_take(&gn, &gt, &gm);
+        if (gn) debugPrintf("[gc] %u collection(s) in the last 2 s: %u ms stopped in total, longest %u ms\n", gn, gt, gm); }
 #endif
       /* memory budget, every 30 s (or when the GPU arena's peak moved) */
       {

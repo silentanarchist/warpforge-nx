@@ -50,7 +50,32 @@ typedef struct {
   int fd;
   int timeout_ms;
   mbedtls_ssl_context ssl;
+  /* for the "closed early" diagnostic */
+  long sent, rcvd; unsigned reads; u64 t_open; char host[64];
+  /* lifetime: see wf_tls_close */
+  volatile int users, dead, finished;
 } wf_tls_t;
+
+/* Closed connections are kept here a while before free(): a thread that was
+ * inside wf_tls_read when the connection was closed may still read a field or
+ * two on its way out. */
+#define TLS_QUARANTINE 64
+static wf_tls_t *g_quar[TLS_QUARANTINE]; static unsigned g_quar_n; static Mutex g_quar_lock;
+static void tls_finish(wf_tls_t *t) {
+  if (__atomic_exchange_n(&t->finished, 1, __ATOMIC_SEQ_CST)) return;
+  mbedtls_ssl_free(&t->ssl);
+  close(t->fd);
+  mutexLock(&g_quar_lock);
+  wf_tls_t *old = g_quar[g_quar_n % TLS_QUARANTINE];
+  g_quar[g_quar_n++ % TLS_QUARANTINE] = t;
+  mutexUnlock(&g_quar_lock);
+  free(old);
+}
+static void tls_enter(wf_tls_t *t) { __atomic_add_fetch(&t->users, 1, __ATOMIC_SEQ_CST); }
+static void tls_leave(wf_tls_t *t) {
+  if (__atomic_sub_fetch(&t->users, 1, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&t->dead, __ATOMIC_SEQ_CST))
+    tls_finish(t);
+}
 
 static mbedtls_ssl_config      g_conf;
 static mbedtls_ctr_drbg_context g_drbg;
@@ -96,11 +121,22 @@ static int bio_send(void *ctx, const unsigned char *buf, size_t len) {
 }
 static int bio_recv(void *ctx, unsigned char *buf, size_t len) {
   wf_tls_t *t = ctx;
-  if (t->timeout_ms > 0) {
-    struct pollfd p = { .fd = t->fd, .events = POLLIN };
-    int r = poll(&p, 1, t->timeout_ms);
-    if (r == 0) return MBEDTLS_ERR_SSL_TIMEOUT;
-    if (r < 0) return MBEDTLS_ERR_NET_RECV_FAILED;
+  /* Waits in 100 ms slices: Horizon's shutdown() does not wake a thread in
+   * poll(), so a closed connection's reader used to sit here for the whole
+   * timeout -- and wake on whatever NEW socket got the same fd number, stealing
+   * its response (every https request in battle then "ended prematurely"). */
+  {
+    int left = t->timeout_ms > 0 ? t->timeout_ms : -1;
+    for (;;) {
+      if (__atomic_load_n(&t->dead, __ATOMIC_SEQ_CST)) return MBEDTLS_ERR_NET_CONN_RESET;
+      struct pollfd p = { .fd = t->fd, .events = POLLIN };
+      int slice = (left < 0 || left > 100) ? 100 : left;
+      int r = poll(&p, 1, slice);
+      if (r > 0) break;
+      if (r < 0 && errno != EINTR) return MBEDTLS_ERR_NET_RECV_FAILED;
+      if (left > 0) { left -= slice; if (left <= 0) return MBEDTLS_ERR_SSL_TIMEOUT; }
+    }
+    if (__atomic_load_n(&t->dead, __ATOMIC_SEQ_CST)) return MBEDTLS_ERR_NET_CONN_RESET;
   }
   ssize_t n = recv(t->fd, buf, len, 0);
   if (n > 0) return (int)n;
@@ -136,6 +172,7 @@ void *wf_tls_connect(const char *host, int port, int timeout_ms, char *err, int 
 
   wf_tls_t *t = calloc(1, sizeof *t);
   t->fd = fd; t->timeout_ms = timeout_ms > 0 ? timeout_ms : 30000;
+  t->t_open = armGetSystemTick(); snprintf(t->host, sizeof t->host, "%s", host);
   mbedtls_ssl_init(&t->ssl);
   int rc = mbedtls_ssl_setup(&t->ssl, &g_conf);
   if (rc == 0) rc = mbedtls_ssl_set_hostname(&t->ssl, host);
@@ -166,13 +203,30 @@ fail:
 }
 
 /* >0 bytes, 0 = closed by the server, <0 = error */
+static int tls_read_inner(wf_tls_t *t, unsigned char *buf, int len);
 int wf_tls_read(void *h, unsigned char *buf, int len) {
   wf_tls_t *t = h;
   if (!t || len <= 0) return -1;
+  if (__atomic_load_n(&t->dead, __ATOMIC_SEQ_CST)) return 0;
+  tls_enter(t);
+  int r = tls_read_inner(t, buf, len);
+  tls_leave(t);
+  return r;
+}
+static int tls_read_inner(wf_tls_t *t, unsigned char *buf, int len) {
   for (;;) {
     int r = mbedtls_ssl_read(&t->ssl, buf, (size_t)len);
-    if (r > 0) return r;
-    if (r == 0 || r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_NET_CONN_RESET) return 0;
+    if (r > 0) { t->rcvd += r; t->reads++; return r; }
+    if (r == 0 || r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_NET_CONN_RESET) {
+      /* closed with nothing received after a request went out = "response ended
+       * prematurely" upstairs; say how (every https request in battle failed so) */
+      static unsigned logged;
+      if (t->sent > 0 && t->rcvd == 0 && logged < 20) { logged++;
+        debugPrintf("[tls] %s closed the connection %s after %u ms with %ld bytes sent, nothing received (errno %d)\n",
+                    t->host, r == 0 ? "(EOF)" : r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ? "(close_notify)" : "(reset)",
+                    (unsigned)((armGetSystemTick() - t->t_open) / (armGetSystemTickFreq() / 1000)), t->sent, errno); }
+      return 0;
+    }
     if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
 #ifdef MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET
     if (r == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) continue;
@@ -185,23 +239,30 @@ int wf_tls_read(void *h, unsigned char *buf, int len) {
 int wf_tls_write(void *h, const unsigned char *buf, int len) {
   wf_tls_t *t = h;
   if (!t) return -1;
+  if (__atomic_load_n(&t->dead, __ATOMIC_SEQ_CST)) return -1;
+  tls_enter(t);
   int done = 0;
   while (done < len) {
     int r = mbedtls_ssl_write(&t->ssl, buf + done, (size_t)(len - done));
-    if (r > 0) { done += r; continue; }
-    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+    if (r > 0) { done += r; t->sent += r; continue; }
+    if ((r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) && !t->dead) continue;
+    tls_leave(t);
     return r;
   }
+  tls_leave(t);
   return done;
 }
 
+/* The socket is closed (and its fd number freed for reuse) only once no thread
+ * is inside a read or write on it; whoever leaves last does it. */
 void wf_tls_close(void *h) {
   wf_tls_t *t = h;
   if (!t) return;
-  mbedtls_ssl_close_notify(&t->ssl);
-  mbedtls_ssl_free(&t->ssl);
-  close(t->fd);
-  free(t);
+  if (__atomic_load_n(&t->users, __ATOMIC_SEQ_CST) == 0 && !t->dead)
+    mbedtls_ssl_close_notify(&t->ssl);          /* only when nobody else is in the context */
+  __atomic_store_n(&t->dead, 1, __ATOMIC_SEQ_CST);
+  shutdown(t->fd, SHUT_RDWR);
+  if (__atomic_load_n(&t->users, __ATOMIC_SEQ_CST) == 0) tls_finish(t);
 }
 
 /* For a poll loop around the connection (warpforge_tunnel.c). */
@@ -213,7 +274,9 @@ int wf_tls_pending(void *h) { wf_tls_t *t = h; return t ? (int)mbedtls_ssl_get_b
  * side calls it from another thread, then wf_tls_close). */
 void wf_tls_abort(void *h) {
   wf_tls_t *t = h;
-  if (t) shutdown(t->fd, SHUT_RDWR);
+  if (!t) return;
+  __atomic_store_n(&t->dead, 1, __ATOMIC_SEQ_CST);   /* the sliced waits notice this */
+  shutdown(t->fd, SHUT_RDWR);
 }
 
 #endif /* WF_MONO */

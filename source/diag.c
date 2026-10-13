@@ -429,6 +429,88 @@ static void watchdog_main(void *unused) {
   }
 }
 
+/* ---- slow-frame sampler --------------------------------------------------
+ * The owner sees a short (~0.3-0.9 s) freeze every second or two in battle, and
+ * the log shows SLOW nativeRender frames at that rhythm. A frame that slow never
+ * reaches the 3 s stall dump, so nothing said what the main thread was doing.
+ * This thread looks every 25 ms; while the current frame has run past 120 ms it
+ * briefly pauses the engine's main thread, records its PC and the first few
+ * libunity/libil2cpp return addresses on its stack, and resumes it. When the
+ * frame ends, the most frequent ones are written to stall.log as one
+ * "[slow]" line per slow frame (first 40 frames). */
+#define SAMPLE_NS     (25ull * 1000000ull)
+#define SLOW_START_NS (120ull * 1000000ull)
+#define SLOW_KEYS 32
+static Thread g_sampler_thread;
+typedef struct { uint64_t addr; unsigned n; } SlowKey;
+static void key_add(SlowKey *k, int *nk, uint64_t a) {
+  for (int i = 0; i < *nk; i++) if (k[i].addr == a) { k[i].n++; return; }
+  if (*nk < SLOW_KEYS) { k[*nk].addr = a; k[*nk].n = 1; (*nk)++; }
+}
+static void key_print(const char *what, SlowKey *k, int nk) {
+  for (int i = 0; i < nk; i++) for (int j = i + 1; j < nk; j++)
+    if (k[j].n > k[i].n) { SlowKey t = k[i]; k[i] = k[j]; k[j] = t; }
+  char line[600]; int o = snprintf(line, sizeof line, "[slow]   %s:", what);
+  for (int i = 0; i < nk && i < 6 && o < (int)sizeof line - 60; i++) {
+    char a[40]; resolve_addr(a, sizeof a, k[i].addr);
+    o += snprintf(line + o, sizeof line - o, " %s x%u", a, k[i].n);
+  }
+  stallPrintf("%s\n", line);
+}
+static void sampler_main(void *unused) {
+  (void)unused;
+  static uint8_t tls[BIONIC_TLS_SIZE] __attribute__((aligned(16)));
+  install_bionic_tls(tls);
+  SlowKey pcs[SLOW_KEYS], callers[SLOW_KEYS]; int npc = 0, ncall = 0;
+  unsigned samples = 0, reported = 0; int slow_frame = -1;
+  for (;;) {
+    svcSleepThread(SAMPLE_NS);
+    if (reported >= 40) { svcSleepThread(1000000000ull); continue; }
+    int frame = g_frame;
+    uint64_t idle = tick_to_ns(now_tick() - g_last_progress);
+    if (slow_frame >= 0 && frame != slow_frame) {          /* that slow frame ended */
+      if (samples >= 4) {
+        reported++;
+        stallPrintf("[slow] frame %d took >= %u ms (%u samples of the main thread):\n",
+                    slow_frame, (unsigned)(120 + samples * 25), samples);
+        key_print("pc", pcs, npc);
+        key_print("callers", callers, ncall);
+      }
+      slow_frame = -1; samples = 0; npc = ncall = 0;
+    }
+    if (frame < 20 || idle < SLOW_START_NS || idle > 3000ull * 1000000ull) continue;
+    DiagThread *m = NULL;
+    for (int i = 0; i < DIAG_MAX_THREADS; i++) if (g_threads[i].in_use && g_threads[i].is_main_engine) { m = &g_threads[i]; break; }
+    if (!m || !m->handle) continue;
+    slow_frame = frame;
+    extern void wf_activity_lock(void), wf_activity_unlock(void);
+    extern int wf_gc_is_paused(Handle), wf_gc_active(void);
+    if (wf_gc_active()) { samples++; key_add(pcs, &npc, 1); }      /* "in a GC" (shown as 0x1) */
+    wf_activity_lock();
+    if (wf_gc_is_paused(m->handle)) { wf_activity_unlock(); continue; }
+    ThreadContext ctx;
+    if (R_FAILED(svcSetThreadActivity(m->handle, ThreadActivity_Paused))) { wf_activity_unlock(); continue; }
+    Result gr = svcGetThreadContext3(&ctx, m->handle);
+    uint64_t found[4]; int nf = 0;
+    if (R_SUCCEEDED(gr)) {
+      uint64_t sp = ctx.sp & ~7ull;
+      if (wd_readable(sp, 0x800)) {
+        for (uint64_t a = sp; a < sp + 0x800 && nf < 4; a += 8) {
+          uint64_t v = *(const uint64_t *)(uintptr_t)a;
+          so_module *mod = so_find_module_by_addr((const void *)(uintptr_t)v);
+          if (mod && (strstr(mod->name, "unity") || strstr(mod->name, "il2cpp"))) found[nf++] = v;
+        }
+      }
+    }
+    svcSetThreadActivity(m->handle, ThreadActivity_Runnable);
+    wf_activity_unlock();
+    if (R_FAILED(gr)) continue;
+    samples++;
+    key_add(pcs, &npc, ctx.pc.x);
+    for (int i = 0; i < nf; i++) key_add(callers, &ncall, found[i]);
+  }
+}
+
 void diag_watchdog_start(void) {
   if (g_wd_started) return;
   g_wd_started = 1;
@@ -460,6 +542,9 @@ void diag_watchdog_start(void) {
       rc = threadCreate(&g_wd_thread, watchdog_main, NULL, NULL, 0x4000, PRIOS[i], -2);
     if (R_SUCCEEDED(rc)) { used = PRIOS[i]; break; }
   }
+  if (R_SUCCEEDED(threadCreate(&g_sampler_thread, sampler_main, NULL, NULL, 0x4000, used ? used : 0x2C, 2)) ||
+      R_SUCCEEDED(threadCreate(&g_sampler_thread, sampler_main, NULL, NULL, 0x4000, 0x2C, -2)))
+    threadStart(&g_sampler_thread);
   if (R_SUCCEEDED(rc) && R_SUCCEEDED(threadStart(&g_wd_thread)))
     stallPrintf("[wd] watchdog armed (stall=%llus, poll=1s, prio=0x%02x)\n",
                 (unsigned long long)(DIAG_STALL_NS / 1000000000ull), used);
